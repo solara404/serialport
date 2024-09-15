@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const serialport = @import("../serialport.zig");
 
@@ -32,7 +33,20 @@ pub const Port = struct {
         settings.cflag.CREAD = true;
         settings.cflag.CSTOPB = config.stop_bits == .two;
         settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
-        settings.cflag.CRTSCTS = config.handshake == .hardware;
+        if (config.handshake == .hardware) {
+            if (comptime builtin.os.tag.isDarwin() or
+                builtin.os.tag == .freebsd or builtin.os.tag == .dragonfly)
+            {
+                settings.cflag.CCTS_OFLOW = true;
+                settings.cflag.CRTS_IFLOW = true;
+            } else if (comptime builtin.os.tag == .haiku) {
+                settings.cflag.CTSFLOW = true;
+                settings.cflag.RTSFLOW = true;
+            } else {
+                settings.cflag.CRTSCTS = true;
+            }
+        }
+
         settings.cflag.PARENB = config.parity != .none;
         switch (config.parity) {
             .none, .even => {},
