@@ -1,6 +1,9 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const serialport = @import("../serialport.zig");
+const c = @cImport({
+    @cInclude("termios.h");
+});
 
 pub const Port = struct {
     name: []const u8,
@@ -123,11 +126,17 @@ pub const Port = struct {
 
 const TCFLUSH = switch (builtin.os.tag) {
     .openbsd => std.c.TCFLUSH,
-    else => enum(usize) {
+    .macos => enum(c_int) {
+        I = c.TCIFLUSH,
+        O = c.TCOFLUSH,
+        IO = c.TCIOFLUSH,
+    },
+    .linux => enum(usize) {
         I = 0,
         O = 1,
         IO = 2,
     },
+    else => @compileError("tcflush unimplemented on this OS"),
 };
 
 fn tcflush(fd: std.posix.fd_t, action: TCFLUSH) !void {
@@ -141,7 +150,9 @@ fn tcflush(fd: std.posix.fd_t, action: TCFLUSH) !void {
                 @intFromEnum(action),
             );
         },
-        .macos => try std.c.tcflush(fd, @intFromEnum(action)),
+        .macos => b: {
+            break :b c.tcflush(fd, @intFromEnum(action));
+        },
         else => @compileError("tcflush unimplemented on this OS"),
     };
     return switch (std.posix.errno(result)) {
