@@ -75,7 +75,14 @@ pub const Port = struct {
         }
     }
 
-    pub fn configure(self: *@This(), config: serialport.Config) !void {
+    pub fn close(self: *@This()) void {
+        if (self.file) |f| {
+            f.close();
+            self.file = null;
+        }
+    }
+
+    pub fn configure(self: @This(), config: serialport.Config) !void {
         if (self.file == null) return;
 
         var dcb: DCB = std.mem.zeroes(DCB);
@@ -103,10 +110,16 @@ pub const Port = struct {
         }
     }
 
-    pub fn close(self: *@This()) void {
-        if (self.file) |f| {
-            f.close();
-            self.file = null;
+    pub fn flush(
+        self: @This(),
+        options: serialport.ManagedPort.FlushOptions,
+    ) !void {
+        if ((!options.input and !options.output) or self.file == null) return;
+        if (PurgeComm(self.file.?.handle, .{
+            .PURGE_TXCLEAR = options.output,
+            .PURGE_RXCLEAR = options.input,
+        }) == 0) {
+            return windows.unexpectedError(windows.GetLastError());
         }
     }
 
@@ -286,4 +299,15 @@ extern "kernel32" fn SetCommState(
 extern "kernel32" fn GetCommState(
     hFile: windows.HANDLE,
     lpDCB: *DCB,
+) callconv(windows.WINAPI) windows.BOOL;
+
+extern "kernel32" fn PurgeComm(
+    hFile: windows.HANDLE,
+    dwFlags: packed struct(windows.DWORD) {
+        PURGE_TXABORT: bool = false,
+        PURGE_RXABORT: bool = false,
+        PURGE_TXCLEAR: bool = false,
+        PURGE_RXCLEAR: bool = false,
+        _: u28 = 0,
+    },
 ) callconv(windows.WINAPI) windows.BOOL;

@@ -67,16 +67,25 @@ pub const ManagedPort = struct {
     pub const Writer = Port.Writer;
     pub const WriteError = Port.WriteError;
 
+    pub const FlushOptions = struct {
+        input: bool = false,
+        output: bool = false,
+    };
+
     pub fn open(self: *@This()) !void {
         return self.port.open();
     }
 
-    pub fn configure(self: *@This(), config: Config) !void {
+    pub fn close(self: *@This()) void {
+        self.port.close();
+    }
+
+    pub fn configure(self: @This(), config: Config) !void {
         return self.port.configure(config);
     }
 
-    pub fn close(self: *@This()) void {
-        self.port.close();
+    pub fn flush(self: @This(), options: FlushOptions) !void {
+        return self.port.flush(options);
     }
 
     pub fn reader(self: @This()) ?Reader {

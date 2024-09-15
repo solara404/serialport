@@ -19,7 +19,14 @@ pub const Port = struct {
         });
     }
 
-    pub fn configure(self: *@This(), config: serialport.Config) !void {
+    pub fn close(self: *@This()) void {
+        if (self.file) |f| {
+            f.close();
+            self.file = null;
+        }
+    }
+
+    pub fn configure(self: @This(), config: serialport.Config) !void {
         if (self.file == null) return;
 
         var settings = try std.posix.tcgetattr(self.file.?.handle);
@@ -80,11 +87,20 @@ pub const Port = struct {
         try std.posix.tcsetattr(self.file.?.handle, .NOW, settings);
     }
 
-    pub fn close(self: *@This()) void {
-        if (self.file) |f| {
-            f.close();
-            self.file = null;
-        }
+    pub fn flush(
+        self: @This(),
+        options: serialport.ManagedPort.FlushOptions,
+    ) !void {
+        if ((!options.input and !options.output) or self.file == null) return;
+        try tcflush(
+            self.file.?.handle,
+            if (options.input and options.output)
+                .IO
+            else if (options.input)
+                .I
+            else
+                .O,
+        );
     }
 
     pub fn reader(self: @This()) ?Reader {
@@ -104,3 +120,34 @@ pub const Port = struct {
         self.* = undefined;
     }
 };
+
+const TCFLUSH = switch (builtin.os.tag) {
+    .openbsd => std.c.TCFLUSH,
+    else => enum(usize) {
+        I = 0,
+        O = 1,
+        IO = 2,
+    },
+};
+
+fn tcflush(fd: std.posix.fd_t, action: TCFLUSH) !void {
+    const result = switch (comptime builtin.os.tag) {
+        .linux => b: {
+            const TCFLSH = 0x540B;
+            break :b std.os.linux.syscall3(
+                .ioctl,
+                @bitCast(@as(isize, @intCast(fd))),
+                TCFLSH,
+                @intFromEnum(action),
+            );
+        },
+        .macos => try std.c.tcflush(fd, @intFromEnum(action)),
+        else => @compileError("tcflush unimplemented on this OS"),
+    };
+    return switch (std.posix.errno(result)) {
+        .SUCCESS => {},
+        .BADF => error.FileNotFound,
+        .NOTTY => error.FileNotTty,
+        else => unreachable,
+    };
+}
