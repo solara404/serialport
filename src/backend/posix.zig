@@ -52,12 +52,16 @@ pub const Port = struct {
             .none, .even => {},
             .odd => settings.cflag.PARODD = true,
             .mark => {
-                settings.cflag.PARODD = true;
-                settings.cflag.CMSPAR = true;
+                if (comptime @hasDecl(std.posix.tc_cflag_t, "CMSPAR")) {
+                    settings.cflag.PARODD = true;
+                    settings.cflag.CMSPAR = true;
+                } else return error.ParityMarkSpaceUnsupported;
             },
             .space => {
-                settings.cflag.PARODD = false;
-                settings.cflag.CMSPAR = true;
+                if (comptime @hasDecl(std.posix.tc_cflag_t, "CMSPAR")) {
+                    settings.cflag.PARODD = false;
+                    settings.cflag.CMSPAR = true;
+                } else return error.ParityMarkSpaceUnsupported;
             },
         }
 
