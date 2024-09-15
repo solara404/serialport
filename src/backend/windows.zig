@@ -81,7 +81,7 @@ pub const Port = struct {
         var dcb: DCB = std.mem.zeroes(DCB);
         dcb.DCBlength = @sizeOf(DCB);
 
-        if (GetCommState(self.file.?, &dcb) == 0)
+        if (GetCommState(self.file.?.handle, &dcb) == 0)
             return windows.unexpectedError(windows.GetLastError());
 
         dcb.BaudRate = config.baud_rate;
@@ -98,7 +98,7 @@ pub const Port = struct {
         dcb.XonChar = 0x11;
         dcb.XoffChar = 0x13;
 
-        if (SetCommState(self.file.?, &dcb) == 0) {
+        if (SetCommState(self.file.?.handle, &dcb) == 0) {
             return windows.unexpectedError(windows.GetLastError());
         }
     }
