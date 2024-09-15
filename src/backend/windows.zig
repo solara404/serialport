@@ -92,7 +92,7 @@ pub const Port = struct {
             .InX = config.handshake == .software,
             .RtsControl = config.handshake == .hardware,
         };
-        dcb.ByteSize = 5 + @intFromEnum(config.word_size);
+        dcb.ByteSize = 5 + @as(windows.BYTE, @intFromEnum(config.word_size));
         dcb.Parity = @intFromEnum(config.parity);
         dcb.StopBits = if (config.stop_bits == .two) 2 else 0;
         dcb.XonChar = 0x11;
