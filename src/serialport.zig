@@ -104,7 +104,9 @@ pub const ManagedPort = struct {
 
 const backend = switch (builtin.os.tag) {
     .windows => @import("backend/windows.zig"),
-    else => @import("backend/posix.zig"),
+    .macos => @import("backend/macos.zig"),
+    .linux => @import("backend/linux.zig"),
+    else => @compileError("unsupported OS"),
 };
 
 test {

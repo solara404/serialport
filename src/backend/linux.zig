@@ -1,9 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const serialport = @import("../serialport.zig");
-const c = @cImport({
-    @cInclude("termios.h");
-});
 
 pub const Port = struct {
     name: []const u8,
@@ -44,17 +41,7 @@ pub const Port = struct {
         settings.cflag.CSTOPB = config.stop_bits == .two;
         settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
         if (config.handshake == .hardware) {
-            if (comptime builtin.os.tag.isDarwin() or
-                builtin.os.tag == .freebsd or builtin.os.tag == .dragonfly)
-            {
-                settings.cflag.CCTS_OFLOW = true;
-                settings.cflag.CRTS_IFLOW = true;
-            } else if (comptime builtin.os.tag == .haiku) {
-                settings.cflag.CTSFLOW = true;
-                settings.cflag.RTSFLOW = true;
-            } else {
-                settings.cflag.CRTSCTS = true;
-            }
+            settings.cflag.CRTSCTS = true;
         }
 
         settings.cflag.PARENB = config.parity != .none;
@@ -62,16 +49,12 @@ pub const Port = struct {
             .none, .even => {},
             .odd => settings.cflag.PARODD = true,
             .mark => {
-                if (comptime @hasDecl(std.posix.tc_cflag_t, "CMSPAR")) {
-                    settings.cflag.PARODD = true;
-                    settings.cflag.CMSPAR = true;
-                } else return error.ParityMarkSpaceUnsupported;
+                settings.cflag.PARODD = true;
+                settings.cflag.CMSPAR = true;
             },
             .space => {
-                if (comptime @hasDecl(std.posix.tc_cflag_t, "CMSPAR")) {
-                    settings.cflag.PARODD = false;
-                    settings.cflag.CMSPAR = true;
-                } else return error.ParityMarkSpaceUnsupported;
+                settings.cflag.PARODD = false;
+                settings.cflag.CMSPAR = true;
             },
         }
 
@@ -95,15 +78,29 @@ pub const Port = struct {
         options: serialport.ManagedPort.FlushOptions,
     ) !void {
         if ((!options.input and !options.output) or self.file == null) return;
-        try tcflush(
-            self.file.?.handle,
+
+        const TCIFLUSH = 0;
+        const TCOFLUSH = 1;
+        const TCIOFLUSH = 2;
+        const TCFLSH = 0x540B;
+
+        const result = std.os.linux.syscall3(
+            .ioctl,
+            @bitCast(@as(isize, @intCast(self.file.?.handle))),
+            TCFLSH,
             if (options.input and options.output)
-                .IO
+                TCIOFLUSH
             else if (options.input)
-                .I
+                TCIFLUSH
             else
-                .O,
+                TCOFLUSH,
         );
+        return switch (std.posix.errno(result)) {
+            .SUCCESS => {},
+            .BADF => error.FileNotFound,
+            .NOTTY => error.FileNotTty,
+            else => unreachable,
+        };
     }
 
     pub fn reader(self: @This()) ?Reader {
@@ -123,42 +120,3 @@ pub const Port = struct {
         self.* = undefined;
     }
 };
-
-const TCFLUSH = switch (builtin.os.tag) {
-    .openbsd => std.c.TCFLUSH,
-    .macos => enum(c_int) {
-        I = c.TCIFLUSH,
-        O = c.TCOFLUSH,
-        IO = c.TCIOFLUSH,
-    },
-    .linux => enum(usize) {
-        I = 0,
-        O = 1,
-        IO = 2,
-    },
-    else => @compileError("tcflush unimplemented on this OS"),
-};
-
-fn tcflush(fd: std.posix.fd_t, action: TCFLUSH) !void {
-    const result = switch (comptime builtin.os.tag) {
-        .linux => b: {
-            const TCFLSH = 0x540B;
-            break :b std.os.linux.syscall3(
-                .ioctl,
-                @bitCast(@as(isize, @intCast(fd))),
-                TCFLSH,
-                @intFromEnum(action),
-            );
-        },
-        .macos => b: {
-            break :b c.tcflush(fd, @intFromEnum(action));
-        },
-        else => @compileError("tcflush unimplemented on this OS"),
-    };
-    return switch (std.posix.errno(result)) {
-        .SUCCESS => {},
-        .BADF => error.FileNotFound,
-        .NOTTY => error.FileNotTty,
-        else => unreachable,
-    };
-}
