@@ -150,19 +150,29 @@ test {
         @cInclude("unistd.h");
     });
 
-    const master = c.posix_openpt(c.O_RDWR);
-    if (master < 0)
-        return error.MasterPseudoTerminalSetupError;
-    defer _ = c.close(master);
+    var master: Port = .{
+        .name = "/dev/ptmx",
+        .file = null,
+    };
+    try master.open();
+    defer master.close();
 
-    if (c.grantpt(master) < 0 or c.unlockpt(master) < 0)
+    if (c.grantpt(master.file.?.handle) < 0 or
+        c.unlockpt(master.file.?.handle) < 0)
         return error.MasterPseudoTerminalSetupError;
 
-    const slave_name = c.ptsname(master) orelse
+    const slave_name = c.ptsname(master.file.?.handle) orelse
         return error.SlavePseudoTerminalSetupError;
     const slave_name_len = std.mem.len(slave_name);
     if (slave_name_len == 0)
         return error.SlavePseudoTerminalSetupError;
+
+    try master.configure(.{
+        .baud_rate = .B115200,
+    });
+
+    const master_writer = master.writer() orelse
+        return error.InvalidMasterWriter;
 
     var port: Port = .{
         .name = slave_name[0..slave_name_len],
@@ -171,5 +181,17 @@ test {
     try port.open();
     defer port.close();
 
+    try port.configure(.{
+        .baud_rate = .B115200,
+    });
+
+    const reader = port.reader() orelse return error.InvalidPortReader;
+
     try std.testing.expectEqual(false, try port.poll());
+    try std.testing.expectEqual(12, try master_writer.write("test message"));
+    try std.testing.expectEqual(true, try port.poll());
+
+    var buffer: [16]u8 = undefined;
+    try std.testing.expectEqual(12, try reader.read(&buffer));
+    try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
 }
