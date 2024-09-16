@@ -73,6 +73,11 @@ pub const Port = struct {
                 else => |e| return windows.unexpectedError(e),
             }
         }
+        errdefer self.close();
+
+        if (SetCommMask(self.file.?.handle, .{ .RXCHAR = true }) == 0) {
+            return windows.unexpectedError(windows.GetLastError());
+        }
     }
 
     pub fn close(self: *@This()) void {
@@ -121,6 +126,37 @@ pub const Port = struct {
         }) == 0) {
             return windows.unexpectedError(windows.GetLastError());
         }
+    }
+
+    pub fn poll(self: @This()) !bool {
+        if (self.file == null) return false;
+
+        var events: EventMask = undefined;
+
+        var overlapped: windows.OVERLAPPED = .{
+            .Internal = 0,
+            .InternalHigh = 0,
+            .DUMMYUNIONNAME = .{
+                .DUMMYSTRUCTNAME = .{
+                    .Offset = 0,
+                    .OffsetHigh = 0,
+                },
+            },
+            .hEvent = try windows.CreateEventEx(
+                null,
+                "",
+                windows.CREATE_EVENT_MANUAL_RESET,
+                windows.EVENT_ALL_ACCESS,
+            ),
+        };
+        if (WaitCommEvent(self.file.?.handle, &events, &overlapped) == 0) {
+            switch (windows.GetLastError()) {
+                windows.Win32Error.IO_PENDING => return false,
+                else => |e| return windows.unexpectedError(e),
+            }
+        }
+
+        return events.RXCHAR;
     }
 
     pub fn reader(self: @This()) ?Reader {
@@ -301,6 +337,17 @@ extern "kernel32" fn GetCommState(
     lpDCB: *DCB,
 ) callconv(windows.WINAPI) windows.BOOL;
 
+extern "kernel32" fn SetCommMask(
+    hFile: windows.HANDLE,
+    dwEvtMask: EventMask,
+) callconv(windows.WINAPI) windows.BOOL;
+
+extern "kernel32" fn WaitCommEvent(
+    hFile: windows.HANDLE,
+    lpEvtMask: *EventMask,
+    lpOverlapped: ?*windows.OVERLAPPED,
+) callconv(windows.WINAPI) windows.BOOL;
+
 extern "kernel32" fn PurgeComm(
     hFile: windows.HANDLE,
     dwFlags: packed struct(windows.DWORD) {
@@ -311,3 +358,16 @@ extern "kernel32" fn PurgeComm(
         _: u28 = 0,
     },
 ) callconv(windows.WINAPI) windows.BOOL;
+
+const EventMask = packed struct(windows.DWORD) {
+    RXCHAR: bool = false,
+    RXFLAG: bool = false,
+    TXEMPTY: bool = false,
+    CTS: bool = false,
+    DSR: bool = false,
+    RLSD: bool = false,
+    BREAK: bool = false,
+    ERR: bool = false,
+    RING: bool = false,
+    _: u23 = 0,
+};
