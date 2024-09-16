@@ -88,6 +88,10 @@ pub const ManagedPort = struct {
         return self.port.flush(options);
     }
 
+    pub fn poll(self: @This()) !bool {
+        return self.port.poll();
+    }
+
     pub fn reader(self: @This()) ?Reader {
         return self.port.reader();
     }

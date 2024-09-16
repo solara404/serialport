@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    mod_unit_tests.root_module.link_libc = true;
     const run_mod_unit_tests = b.addRunArtifact(mod_unit_tests);
     test_step.dependOn(&run_mod_unit_tests.step);
 

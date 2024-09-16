@@ -103,6 +103,27 @@ pub const Port = struct {
         };
     }
 
+    pub fn poll(self: @This()) !bool {
+        if (self.file == null) return false;
+
+        var pollfds: [1]std.os.linux.pollfd = .{
+            .{
+                .fd = self.file.?.handle,
+                .events = std.os.linux.POLL.IN,
+                .revents = undefined,
+            },
+        };
+        if (std.os.linux.poll(&pollfds, 1, 0) == 0) return false;
+
+        if (pollfds[0].revents & std.os.linux.POLL.IN == 0) return false;
+
+        const err_mask = std.os.linux.POLL.ERR |
+            std.os.linux.POLL.NVAL | std.os.linux.POLL.HUP;
+
+        if (pollfds[0].revents & err_mask != 0) return false;
+        return true;
+    }
+
     pub fn reader(self: @This()) ?Reader {
         return (self.file orelse return null).reader();
     }
@@ -120,3 +141,35 @@ pub const Port = struct {
         self.* = undefined;
     }
 };
+
+test {
+    const c = @cImport({
+        @cDefine("_XOPEN_SOURCE", "700");
+        @cInclude("stdlib.h");
+        @cInclude("fcntl.h");
+        @cInclude("unistd.h");
+    });
+
+    const master = c.posix_openpt(c.O_RDWR);
+    if (master < 0)
+        return error.MasterPseudoTerminalSetupError;
+    defer _ = c.close(master);
+
+    if (c.grantpt(master) < 0 or c.unlockpt(master) < 0)
+        return error.MasterPseudoTerminalSetupError;
+
+    const slave_name = c.ptsname(master) orelse
+        return error.SlavePseudoTerminalSetupError;
+    const slave_name_len = std.mem.len(slave_name);
+    if (slave_name_len == 0)
+        return error.SlavePseudoTerminalSetupError;
+
+    var port: Port = .{
+        .name = slave_name[0..slave_name_len],
+        .file = null,
+    };
+    try port.open();
+    defer port.close();
+
+    try std.testing.expectEqual(false, try port.poll());
+}

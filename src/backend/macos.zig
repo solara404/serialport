@@ -96,6 +96,25 @@ pub const Port = struct {
         };
     }
 
+    pub fn poll(self: @This()) !bool {
+        if (self.file == null) return false;
+
+        var pollfds: [1]std.posix.pollfd = .{
+            .{
+                .fd = self.file.?.handle,
+                .events = std.posix.POLL.IN,
+                .revents = undefined,
+            },
+        };
+        if (try std.posix.poll(&pollfds, 0) == 0) return false;
+        if (pollfds[0].revents & std.posix.POLL.IN == 0) return false;
+
+        const err_mask = std.posix.POLL.ERR | std.posix.POLL.NVAL |
+            std.posix.POLL.HUP;
+        if (pollfds[0].revents & err_mask != 0) return false;
+        return true;
+    }
+
     pub fn reader(self: @This()) ?Reader {
         return (self.file orelse return null).reader();
     }
