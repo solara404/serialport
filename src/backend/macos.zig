@@ -112,15 +112,40 @@ pub fn writer(port: PortImpl) Writer {
 pub const StubImpl = void;
 
 pub fn iterate() !IteratorImpl {
-    @compileError("unimplemented");
+    var result: IteratorImpl = .{
+        .dir = try std.fs.cwd().openDir("/dev", .{ .iterate = true }),
+        .iterator = undefined,
+    };
+    result.iterator = result.dir.iterate();
+    return result;
 }
 
 pub const IteratorImpl = struct {
-    pub fn next(_: *@This()) !?serialport.Iterator.Stub {
-        @compileError("unimplemented");
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
+    name_buffer: [256]u8 = undefined,
+    path_buffer: [std.fs.max_path_bytes]u8 = undefined,
+
+    pub fn next(self: *@This()) !?serialport.Iterator.Stub {
+        var result: serialport.Iterator.Stub = undefined;
+        while (try self.iterator.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (entry.name.len < 4) continue;
+            if (!std.mem.eql(u8, "tty.", entry.name[0..4])) continue;
+
+            @memcpy(
+                self.name_buffer[0 .. entry.name.len - 4],
+                entry.name[4..],
+            );
+            result.name = self.name_buffer[0 .. entry.name.len - 4];
+            @memcpy(self.path_buffer[0..entry.name.len], entry.name);
+            result.path = self.path_buffer[0..entry.name.len];
+            return result;
+        } else return null;
     }
 
-    pub fn deinit(_: *@This()) void {
-        @compileError("unimplemented");
+    pub fn deinit(self: *@This()) void {
+        self.dir.close();
+        self.* = undefined;
     }
 };
