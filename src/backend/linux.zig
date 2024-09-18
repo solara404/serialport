@@ -213,4 +213,21 @@ test {
     var buffer: [16]u8 = undefined;
     try std.testing.expectEqual(12, try reader_.read(&buffer));
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
+    try std.testing.expectEqual(false, try poll(port));
+
+    try std.testing.expectEqual(12, try master_writer.write("test message"));
+    try std.testing.expectEqual(true, try poll(port));
+
+    var small_buffer: [8]u8 = undefined;
+    try std.testing.expectEqual(8, try reader_.read(&small_buffer));
+    try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
+    try std.testing.expectEqual(true, try poll(port));
+    try std.testing.expectEqual(4, try reader_.read(&small_buffer));
+    try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
+    try std.testing.expectEqual(false, try poll(port));
+
+    try std.testing.expectEqual(12, try master_writer.write("test message"));
+    try std.testing.expectEqual(true, try poll(port));
+    try flush(port, .{ .input = true });
+    try std.testing.expectEqual(false, try poll(port));
 }
