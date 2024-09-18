@@ -1,6 +1,48 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
+pub fn open(file_path: []const u8) !Port {
+    return .{ ._impl = try backend.open(file_path) };
+}
+
+pub const Port = struct {
+    _impl: backend.PortImpl,
+
+    pub const Reader = backend.Reader;
+    pub const ReadError = backend.ReadError;
+    pub const Writer = backend.Writer;
+    pub const WriteError = backend.WriteError;
+
+    pub const FlushOptions = struct {
+        input: bool = false,
+        output: bool = false,
+    };
+
+    pub fn close(self: @This()) void {
+        backend.close(self._impl);
+    }
+
+    pub fn configure(self: @This(), config: Config) !void {
+        return backend.configure(self._impl, config);
+    }
+
+    pub fn flush(self: @This(), options: FlushOptions) !void {
+        return backend.flush(self._impl, options);
+    }
+
+    pub fn poll(self: @This()) !bool {
+        return backend.poll(self._impl);
+    }
+
+    pub fn reader(self: @This()) Reader {
+        return backend.reader(self._impl);
+    }
+
+    pub fn writer(self: @This()) Writer {
+        return backend.writer(self._impl);
+    }
+};
+
 pub const Config = struct {
     baud_rate: BaudRate,
     parity: Parity = .none,
@@ -54,56 +96,6 @@ pub const Config = struct {
         /// Hardware handshake with RTS (RFR) / CTS is used.
         hardware,
     };
-};
-
-pub const Port = backend.Port;
-
-pub const ManagedPort = struct {
-    allocator: std.mem.Allocator,
-    port: Port,
-
-    pub const Reader = Port.Reader;
-    pub const ReadError = Port.ReadError;
-    pub const Writer = Port.Writer;
-    pub const WriteError = Port.WriteError;
-
-    pub const FlushOptions = struct {
-        input: bool = false,
-        output: bool = false,
-    };
-
-    pub fn open(self: *@This()) !void {
-        return self.port.open();
-    }
-
-    pub fn close(self: *@This()) void {
-        self.port.close();
-    }
-
-    pub fn configure(self: @This(), config: Config) !void {
-        return self.port.configure(config);
-    }
-
-    pub fn flush(self: @This(), options: FlushOptions) !void {
-        return self.port.flush(options);
-    }
-
-    pub fn poll(self: @This()) !bool {
-        return self.port.poll();
-    }
-
-    pub fn reader(self: @This()) ?Reader {
-        return self.port.reader();
-    }
-
-    pub fn writer(self: @This()) ?Writer {
-        return self.port.writer();
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self.port.deinit(self.allocator);
-        self.* = undefined;
-    }
 };
 
 const backend = switch (builtin.os.tag) {

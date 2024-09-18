@@ -4,131 +4,107 @@ const c = @cImport({
     @cInclude("termios.h");
 });
 
-pub const Port = struct {
-    name: []const u8,
-    file: ?std.fs.File,
+pub const PortImpl = std.fs.File;
+pub const ReadError = std.fs.File.ReadError;
+pub const Reader = std.fs.File.Reader;
+pub const WriteError = std.fs.File.WriteError;
+pub const Writer = std.fs.File.Writer;
 
-    pub const ReadError = std.fs.File.ReadError;
-    pub const Reader = std.fs.File.Reader;
-    pub const WriteError = std.fs.File.WriteError;
-    pub const Writer = std.fs.File.Writer;
+pub fn open(path: []const u8) !PortImpl {
+    return try std.fs.cwd().openFile(path, .{
+        .mode = .read_write,
+        .allow_ctty = false,
+    });
+}
 
-    pub fn open(self: *@This()) !void {
-        if (self.file != null) return;
-        self.file = try std.fs.cwd().openFile(self.name, .{
-            .mode = .read_write,
-            .allow_ctty = false,
-        });
+pub fn close(port: PortImpl) void {
+    port.close();
+}
+
+pub fn configure(port: PortImpl, config: serialport.Config) !void {
+    var settings = try std.posix.tcgetattr(port.handle);
+
+    settings.iflag = .{};
+    settings.iflag.INPCK = config.parity != .none;
+    settings.iflag.IXON = config.handshake == .software;
+    settings.iflag.IXOFF = config.handshake == .software;
+
+    settings.cflag = .{};
+    settings.cflag.CREAD = true;
+    settings.cflag.CSTOPB = config.stop_bits == .two;
+    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
+    if (config.handshake == .hardware) {
+        settings.cflag.CCTS_OFLOW = true;
+        settings.cflag.CRTS_IFLOW = true;
     }
 
-    pub fn close(self: *@This()) void {
-        if (self.file) |f| {
-            f.close();
-            self.file = null;
-        }
+    settings.cflag.PARENB = config.parity != .none;
+    switch (config.parity) {
+        .none, .even => {},
+        .odd => settings.cflag.PARODD = true,
+        .mark => {
+            return error.ParityMarkSpaceUnsupported;
+        },
+        .space => {
+            return error.ParityMarkSpaceUnsupported;
+        },
     }
 
-    pub fn configure(self: @This(), config: serialport.Config) !void {
-        if (self.file == null) return;
+    settings.oflag = .{};
+    settings.lflag = .{};
+    settings.ispeed = config.baud_rate;
+    settings.ospeed = config.baud_rate;
 
-        var settings = try std.posix.tcgetattr(self.file.?.handle);
+    // Minimum arrived bytes before read returns.
+    settings.cc[@intFromEnum(std.posix.V.MIN)] = 0;
+    // Inter-byte timeout before read returns.
+    settings.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+    settings.cc[@intFromEnum(std.posix.V.START)] = 0x11;
+    settings.cc[@intFromEnum(std.posix.V.STOP)] = 0x13;
 
-        settings.iflag = .{};
-        settings.iflag.INPCK = config.parity != .none;
-        settings.iflag.IXON = config.handshake == .software;
-        settings.iflag.IXOFF = config.handshake == .software;
+    try std.posix.tcsetattr(port.handle, .NOW, settings);
+}
 
-        settings.cflag = .{};
-        settings.cflag.CREAD = true;
-        settings.cflag.CSTOPB = config.stop_bits == .two;
-        settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
-        if (config.handshake == .hardware) {
-            settings.cflag.CCTS_OFLOW = true;
-            settings.cflag.CRTS_IFLOW = true;
-        }
+pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
+    if (!options.input and !options.output) return;
+    const result = c.tcflush(
+        port.handle,
+        if (options.input and options.output)
+            c.TCIOFLUSH
+        else if (options.input)
+            c.TCIFLUSH
+        else
+            c.TCOFLUSH,
+    );
+    return switch (std.posix.errno(result)) {
+        .SUCCESS => {},
+        .BADF => error.FileNotFound,
+        .NOTTY => error.FileNotTty,
+        else => unreachable,
+    };
+}
 
-        settings.cflag.PARENB = config.parity != .none;
-        switch (config.parity) {
-            .none, .even => {},
-            .odd => settings.cflag.PARODD = true,
-            .mark => {
-                return error.ParityMarkSpaceUnsupported;
-            },
-            .space => {
-                return error.ParityMarkSpaceUnsupported;
-            },
-        }
+pub fn poll(port: PortImpl) !bool {
+    var pollfds: [1]std.posix.pollfd = .{
+        .{
+            .fd = port.handle,
+            .events = std.posix.POLL.IN,
+            .revents = undefined,
+        },
+    };
+    if (try std.posix.poll(&pollfds, 0) == 0) return false;
+    if (pollfds[0].revents & std.posix.POLL.IN == 0) return false;
 
-        settings.oflag = .{};
-        settings.lflag = .{};
-        settings.ispeed = config.baud_rate;
-        settings.ospeed = config.baud_rate;
+    const err_mask = std.posix.POLL.ERR | std.posix.POLL.NVAL |
+        std.posix.POLL.HUP;
+    if (pollfds[0].revents & err_mask != 0) return false;
+    return true;
+}
 
-        // Minimum arrived bytes before read returns.
-        settings.cc[@intFromEnum(std.posix.V.MIN)] = 0;
-        // Inter-byte timeout before read returns.
-        settings.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-        settings.cc[@intFromEnum(std.posix.V.START)] = 0x11;
-        settings.cc[@intFromEnum(std.posix.V.STOP)] = 0x13;
+pub fn reader(port: PortImpl) Reader {
+    return port.reader();
+}
 
-        try std.posix.tcsetattr(self.file.?.handle, .NOW, settings);
-    }
-
-    pub fn flush(
-        self: @This(),
-        options: serialport.ManagedPort.FlushOptions,
-    ) !void {
-        if ((!options.input and !options.output) or self.file == null) return;
-        const result = c.tcflush(
-            self.file.?.handle,
-            if (options.input and options.output)
-                c.TCIOFLUSH
-            else if (options.input)
-                c.TCIFLUSH
-            else
-                c.TCOFLUSH,
-        );
-        return switch (std.posix.errno(result)) {
-            .SUCCESS => {},
-            .BADF => error.FileNotFound,
-            .NOTTY => error.FileNotTty,
-            else => unreachable,
-        };
-    }
-
-    pub fn poll(self: @This()) !bool {
-        if (self.file == null) return false;
-
-        var pollfds: [1]std.posix.pollfd = .{
-            .{
-                .fd = self.file.?.handle,
-                .events = std.posix.POLL.IN,
-                .revents = undefined,
-            },
-        };
-        if (try std.posix.poll(&pollfds, 0) == 0) return false;
-        if (pollfds[0].revents & std.posix.POLL.IN == 0) return false;
-
-        const err_mask = std.posix.POLL.ERR | std.posix.POLL.NVAL |
-            std.posix.POLL.HUP;
-        if (pollfds[0].revents & err_mask != 0) return false;
-        return true;
-    }
-
-    pub fn reader(self: @This()) ?Reader {
-        return (self.file orelse return null).reader();
-    }
-
-    pub fn writer(self: @This()) ?Writer {
-        return (self.file orelse return null).writer();
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        if (self.file) |f| {
-            f.close();
-            self.file = null;
-        }
-        allocator.free(self.name);
-        self.* = undefined;
-    }
-};
+pub fn writer(port: PortImpl) Writer {
+    return port.writer();
+}
