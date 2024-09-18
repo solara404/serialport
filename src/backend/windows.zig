@@ -150,6 +150,99 @@ pub fn writer(port: PortImpl) Writer {
     return .{ .context = port };
 }
 
+pub fn iterate() !IteratorImpl {
+    const HKEY_LOCAL_MACHINE = @as(windows.HKEY, @ptrFromInt(0x80000002));
+    const KEY_READ = 0x20019;
+
+    const w_str: [30:0]u16 = .{
+        'H',
+        'A',
+        'R',
+        'D',
+        'W',
+        'A',
+        'R',
+        'E',
+        '\\',
+        'D',
+        'E',
+        'V',
+        'I',
+        'C',
+        'E',
+        'M',
+        'A',
+        'P',
+        '\\',
+        'S',
+        'E',
+        'R',
+        'I',
+        'A',
+        'L',
+        'C',
+        'O',
+        'M',
+        'M',
+        '\\',
+    };
+
+    var result: IteratorImpl = .{ .key = undefined };
+    if (windows.advapi32.RegOpenKeyExW(
+        HKEY_LOCAL_MACHINE,
+        &w_str,
+        0,
+        KEY_READ,
+        &result.key,
+    ) != 0) {
+        return windows.unexpectedError(windows.GetLastError());
+    }
+
+    return result;
+}
+
+pub const IteratorImpl = struct {
+    key: windows.HKEY,
+    index: windows.DWORD = 0,
+    name_buffer: [16]u8 = undefined,
+    path_buffer: [16]u8 = undefined,
+
+    pub fn next(self: *@This()) !?serialport.Iterator.Stub {
+        defer self.index += 1;
+
+        var name_size: windows.DWORD = 256;
+        var data_size: windows.DWORD = 256;
+        var name: [255:0]u8 = undefined;
+
+        return switch (RegEnumValueA(
+            self.key,
+            self.index,
+            &name,
+            &name_size,
+            null,
+            null,
+            &self.name_buffer,
+            &data_size,
+        )) {
+            0 => serialport.Iterator.Stub{
+                .name = self.name_buffer[0 .. data_size - 1],
+                .path = try std.fmt.bufPrint(
+                    &self.path_buffer,
+                    "\\\\.\\{s}",
+                    .{self.name_buffer[0 .. data_size - 1]},
+                ),
+            },
+            259 => null,
+            else => windows.unexpectedError(windows.GetLastError()),
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        _ = windows.advapi32.RegCloseKey(self.key);
+        self.* = undefined;
+    }
+};
+
 const ReadContext = std.fs.File;
 fn readFn(context: ReadContext, buffer: []u8) ReadError!usize {
     var overlapped: windows.OVERLAPPED = .{
@@ -295,6 +388,19 @@ const DCB = extern struct {
     };
 };
 
+const EventMask = packed struct(windows.DWORD) {
+    RXCHAR: bool = false,
+    RXFLAG: bool = false,
+    TXEMPTY: bool = false,
+    CTS: bool = false,
+    DSR: bool = false,
+    RLSD: bool = false,
+    BREAK: bool = false,
+    ERR: bool = false,
+    RING: bool = false,
+    _: u23 = 0,
+};
+
 extern "kernel32" fn SetCommState(
     hFile: windows.HANDLE,
     lpDCB: *DCB,
@@ -327,31 +433,13 @@ extern "kernel32" fn PurgeComm(
     },
 ) callconv(windows.WINAPI) windows.BOOL;
 
-const EventMask = packed struct(windows.DWORD) {
-    RXCHAR: bool = false,
-    RXFLAG: bool = false,
-    TXEMPTY: bool = false,
-    CTS: bool = false,
-    DSR: bool = false,
-    RLSD: bool = false,
-    BREAK: bool = false,
-    ERR: bool = false,
-    RING: bool = false,
-    _: u23 = 0,
-};
-
-pub const StubImpl = void;
-
-pub fn iterate() !IteratorImpl {
-    @compileError("unimplemented");
-}
-
-pub const IteratorImpl = struct {
-    pub fn next(_: *@This()) !?serialport.Iterator.Stub {
-        @compileError("unimplemented");
-    }
-
-    pub fn deinit(_: *@This()) void {
-        @compileError("unimplemented");
-    }
-};
+extern "advapi32" fn RegEnumValueA(
+    hKey: windows.HKEY,
+    dwIndex: windows.DWORD,
+    lpValueName: windows.LPSTR,
+    lpcchValueName: *windows.DWORD,
+    lpReserved: ?*windows.DWORD,
+    lpType: ?*windows.DWORD,
+    lpData: [*]windows.BYTE,
+    lpcbData: *windows.DWORD,
+) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;

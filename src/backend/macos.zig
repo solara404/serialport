@@ -109,8 +109,6 @@ pub fn writer(port: PortImpl) Writer {
     return port.writer();
 }
 
-pub const StubImpl = void;
-
 pub fn iterate() !IteratorImpl {
     var result: IteratorImpl = .{
         .dir = try std.fs.cwd().openDir("/dev", .{ .iterate = true }),

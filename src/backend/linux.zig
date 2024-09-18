@@ -170,8 +170,6 @@ pub const IteratorImpl = struct {
     }
 };
 
-pub const StubImpl = void;
-
 test {
     const c = @cImport({
         @cDefine("_XOPEN_SOURCE", "700");

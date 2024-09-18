@@ -116,7 +116,6 @@ pub const Iterator = struct {
     pub const Stub = struct {
         name: []const u8,
         path: []const u8,
-        _impl: backend.StubImpl,
 
         pub fn open(self: @This()) !Port {
             return serialport.open(self.path);
