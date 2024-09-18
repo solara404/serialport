@@ -339,3 +339,19 @@ const EventMask = packed struct(windows.DWORD) {
     RING: bool = false,
     _: u23 = 0,
 };
+
+pub const StubImpl = void;
+
+pub fn iterate() !IteratorImpl {
+    @compileError("unimplemented");
+}
+
+pub const IteratorImpl = struct {
+    pub fn next(_: *@This()) !?serialport.Iterator.Stub {
+        @compileError("unimplemented");
+    }
+
+    pub fn deinit(_: *@This()) void {
+        @compileError("unimplemented");
+    }
+};

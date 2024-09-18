@@ -108,3 +108,19 @@ pub fn reader(port: PortImpl) Reader {
 pub fn writer(port: PortImpl) Writer {
     return port.writer();
 }
+
+pub const StubImpl = void;
+
+pub fn iterate() !IteratorImpl {
+    @compileError("unimplemented");
+}
+
+pub const IteratorImpl = struct {
+    pub fn next(_: *@This()) !?serialport.Iterator.Stub {
+        @compileError("unimplemented");
+    }
+
+    pub fn deinit(_: *@This()) void {
+        @compileError("unimplemented");
+    }
+};

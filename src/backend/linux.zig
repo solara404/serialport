@@ -3,6 +3,7 @@ const std = @import("std");
 const serialport = @import("../serialport.zig");
 
 pub const PortImpl = std.fs.File;
+
 pub const ReadError = std.fs.File.ReadError;
 pub const Reader = std.fs.File.Reader;
 pub const WriteError = std.fs.File.WriteError;
@@ -117,6 +118,59 @@ pub fn reader(port: PortImpl) Reader {
 pub fn writer(port: PortImpl) Writer {
     return port.writer();
 }
+
+pub fn iterate() !IteratorImpl {
+    var result: IteratorImpl = .{
+        .dir = std.fs.cwd().openDir(
+            "/dev/serial/by-id",
+            .{ .iterate = true },
+        ) catch |e| switch (e) {
+            error.FileNotFound => null,
+            else => return e,
+        },
+        .iterator = undefined,
+    };
+    if (result.dir) |d| {
+        result.iterator = d.iterate();
+    }
+    return result;
+}
+
+pub const IteratorImpl = struct {
+    dir: ?std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
+    name_buffer: [256]u8 = undefined,
+    path_buffer: [std.fs.max_path_bytes]u8 = undefined,
+
+    pub fn next(self: *@This()) !?serialport.Iterator.Stub {
+        if (self.dir == null) return null;
+
+        var result: serialport.Iterator.Stub = undefined;
+        while (try self.iterator.next()) |entry| {
+            if (entry.kind != .sym_link) continue;
+            @memcpy(self.name_buffer[0..entry.name.len], entry.name);
+            result.name = self.name_buffer[0..entry.name.len];
+            @memcpy(self.path_buffer[0..18], "/dev/serial/by-id/");
+            @memcpy(self.path_buffer[18 .. 18 + entry.name.len], entry.name);
+            result.path = try std.fs.realpath(
+                self.path_buffer[0 .. entry.name.len + 18],
+                &self.path_buffer,
+            );
+            return result;
+        } else {
+            return null;
+        }
+    }
+
+    pub fn deinit(self: *@This()) void {
+        if (self.dir) |*d| {
+            d.close();
+        }
+        self.* = undefined;
+    }
+};
+
+pub const StubImpl = void;
 
 test {
     const c = @cImport({

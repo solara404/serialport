@@ -1,6 +1,14 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
+const serialport = @This();
+
+pub fn iterate() !Iterator {
+    return .{
+        ._impl = try backend.iterate(),
+    };
+}
+
 pub fn open(file_path: []const u8) !Port {
     return .{ ._impl = try backend.open(file_path) };
 }
@@ -96,6 +104,32 @@ pub const Config = struct {
         /// Hardware handshake with RTS (RFR) / CTS is used.
         hardware,
     };
+};
+
+pub const Iterator = struct {
+    _impl: backend.IteratorImpl,
+
+    /// Serial port stub that contains minimal information necessary to
+    /// identify and open a serial port. Stubs may be dependent on its source
+    /// iterator, and are not guaranteed to stay valid after iterator state
+    /// is changed.
+    pub const Stub = struct {
+        name: []const u8,
+        path: []const u8,
+        _impl: backend.StubImpl,
+
+        pub fn open(self: @This()) !Port {
+            return serialport.open(self.path);
+        }
+    };
+
+    pub fn next(self: *@This()) !?Stub {
+        return self._impl.next();
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self._impl.deinit();
+    }
 };
 
 const backend = switch (builtin.os.tag) {
