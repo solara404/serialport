@@ -130,8 +130,13 @@ pub fn flush(port: *const PortImpl, options: serialport.Port.FlushOptions) !void
 }
 
 pub fn poll(port: *PortImpl) !bool {
-    var events: EventMask = undefined;
+    var comstat: ComStat = undefined;
+    if (ClearCommError(port.file.handle, null, &comstat) == 0) {
+        return windows.unexpectedError(windows.GetLastError());
+    }
+    if (comstat.cbInQue > 0) return true;
 
+    var events: EventMask = undefined;
     if (port.poll_overlapped) |*overlapped| {
         if (windows.GetOverlappedResult(
             port.file.handle,
@@ -457,6 +462,36 @@ const CommTimeouts = extern struct {
     WriteTotalTimeoutConstant: windows.DWORD,
 };
 
+const ErrorsMask = packed struct(windows.DWORD) {
+    /// Input buffer overflow occurred. Either no room in input buffer, or byte
+    /// was received after EOF.
+    RX_OVER: bool = false,
+    /// Character-buffer overrun occurred. Next character is lost.
+    OVERRUN: bool = false,
+    /// Hardware detected parity error.
+    RXPARITY: bool = false,
+    /// Hardware detected a framing error.
+    FRAME: bool = false,
+    /// Hardware detected a break condition.
+    BREAK: bool = false,
+    _: u27 = 0,
+};
+
+const ComStat = extern struct {
+    flags: packed struct(windows.DWORD) {
+        CtsHold: bool = false,
+        DsrHold: bool = false,
+        RlsdHold: bool = false,
+        XoffHold: bool = false,
+        XoffSent: bool = false,
+        Eof: bool = false,
+        Txim: bool = false,
+        Reserved: u25 = 0,
+    },
+    cbInQue: windows.DWORD,
+    cbOutQue: windows.DWORD,
+};
+
 extern "kernel32" fn SetCommState(
     hFile: windows.HANDLE,
     lpDCB: *DCB,
@@ -481,6 +516,12 @@ extern "kernel32" fn WaitCommEvent(
     hFile: windows.HANDLE,
     lpEvtMask: *EventMask,
     lpOverlapped: ?*windows.OVERLAPPED,
+) callconv(windows.WINAPI) windows.BOOL;
+
+extern "kernel32" fn ClearCommError(
+    hFile: windows.HANDLE,
+    lpErrors: ?*ErrorsMask,
+    lpStat: ?*ComStat,
 ) callconv(windows.WINAPI) windows.BOOL;
 
 extern "kernel32" fn PurgeComm(
