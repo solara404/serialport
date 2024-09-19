@@ -26,28 +26,28 @@ pub const Port = struct {
         output: bool = false,
     };
 
-    pub fn close(self: @This()) void {
-        backend.close(self._impl);
+    pub fn close(self: *@This()) void {
+        backend.close(&self._impl);
     }
 
-    pub fn configure(self: @This(), config: Config) !void {
-        return backend.configure(self._impl, config);
+    pub fn configure(self: *@This(), config: Config) !void {
+        return backend.configure(&self._impl, config);
     }
 
-    pub fn flush(self: @This(), options: FlushOptions) !void {
-        return backend.flush(self._impl, options);
+    pub fn flush(self: *@This(), options: FlushOptions) !void {
+        return backend.flush(&self._impl, options);
     }
 
-    pub fn poll(self: @This()) !bool {
-        return backend.poll(self._impl);
+    pub fn poll(self: *@This()) !bool {
+        return backend.poll(&self._impl);
     }
 
-    pub fn reader(self: @This()) Reader {
-        return backend.reader(self._impl);
+    pub fn reader(self: *@This()) Reader {
+        return backend.reader(&self._impl);
     }
 
-    pub fn writer(self: @This()) Writer {
-        return backend.writer(self._impl);
+    pub fn writer(self: *@This()) Writer {
+        return backend.writer(&self._impl);
     }
 };
 
