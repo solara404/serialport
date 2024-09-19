@@ -34,6 +34,8 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
     if (config.handshake == .hardware) {
         settings.cflag.CRTSCTS = true;
+    } else if (config.handshake == .none) {
+        settings.cflag.CLOCAL = true;
     }
 
     settings.cflag.PARENB = config.parity != .none;
@@ -56,11 +58,11 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     settings.ospeed = config.baud_rate;
 
     // Minimum arrived bytes before read returns.
-    settings.cc[@intFromEnum(std.posix.V.MIN)] = 0;
+    settings.cc[@intFromEnum(std.os.linux.V.MIN)] = 0;
     // Inter-byte timeout before read returns.
-    settings.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-    settings.cc[@intFromEnum(std.posix.V.START)] = 0x11;
-    settings.cc[@intFromEnum(std.posix.V.STOP)] = 0x13;
+    settings.cc[@intFromEnum(std.os.linux.V.TIME)] = 0;
+    settings.cc[@intFromEnum(std.os.linux.V.START)] = 0x11;
+    settings.cc[@intFromEnum(std.os.linux.V.STOP)] = 0x13;
 
     try std.posix.tcsetattr(port.handle, .NOW, settings);
 }
