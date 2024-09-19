@@ -162,7 +162,7 @@ pub const IteratorImpl = struct {
     }
 };
 
-test {
+fn openVirtualPorts(master_port: *PortImpl, slave_port: *PortImpl) !void {
     const c = @cImport({
         @cDefine("_XOPEN_SOURCE", "700");
         @cInclude("stdlib.h");
@@ -170,56 +170,102 @@ test {
         @cInclude("unistd.h");
     });
 
-    const master: PortImpl = try open("/dev/ptmx");
-    defer close(master);
+    master_port.* = try open("/dev/ptmx");
+    errdefer close(master_port);
 
-    if (c.grantpt(master.handle) < 0 or
-        c.unlockpt(master.handle) < 0)
+    if (c.grantpt(master_port.handle) < 0 or
+        c.unlockpt(master_port.handle) < 0)
         return error.MasterPseudoTerminalSetupError;
 
-    const slave_name = c.ptsname(master.handle) orelse
+    const slave_name = c.ptsname(master_port.handle) orelse
         return error.SlavePseudoTerminalSetupError;
     const slave_name_len = std.mem.len(slave_name);
     if (slave_name_len == 0)
         return error.SlavePseudoTerminalSetupError;
 
-    try configure(master, .{
-        .baud_rate = .B115200,
-    });
+    slave_port.* = try open(slave_name[0..slave_name_len]);
+}
 
-    const master_writer = writer(master);
+test {
+    var master: PortImpl = undefined;
+    var slave: PortImpl = undefined;
+    try openVirtualPorts(&master, &slave);
+    defer close(&master);
+    defer close(&slave);
 
-    const port: PortImpl = try open(slave_name[0..slave_name_len]);
-    defer close(port);
+    const config: serialport.Config = .{
+        .baud_rate = .B230400,
+        .handshake = .software,
+    };
 
-    try configure(port, .{
-        .baud_rate = .B115200,
-    });
+    try configure(&master, config);
+    try configure(&slave, config);
 
-    const reader_ = reader(port);
+    const writer_m = writer(&master);
+    const reader_s = reader(&slave);
 
-    try std.testing.expectEqual(false, try poll(port));
-    try std.testing.expectEqual(12, try master_writer.write("test message"));
-    try std.testing.expectEqual(true, try poll(port));
+    try std.testing.expectEqual(false, try poll(&slave));
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(&slave));
 
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(12, try reader_.read(&buffer));
+    try std.testing.expectEqual(12, try reader_s.read(&buffer));
     try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
-    try std.testing.expectEqual(false, try poll(port));
+    try std.testing.expectEqual(false, try poll(&slave));
 
-    try std.testing.expectEqual(12, try master_writer.write("test message"));
-    try std.testing.expectEqual(true, try poll(port));
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(&slave));
 
     var small_buffer: [8]u8 = undefined;
-    try std.testing.expectEqual(8, try reader_.read(&small_buffer));
+    try std.testing.expectEqual(8, try reader_s.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
-    try std.testing.expectEqual(true, try poll(port));
-    try std.testing.expectEqual(4, try reader_.read(&small_buffer));
+    try std.testing.expectEqual(true, try poll(&slave));
+    try std.testing.expectEqual(4, try reader_s.read(&small_buffer));
     try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
-    try std.testing.expectEqual(false, try poll(port));
+    try std.testing.expectEqual(false, try poll(&slave));
 
-    try std.testing.expectEqual(12, try master_writer.write("test message"));
-    try std.testing.expectEqual(true, try poll(port));
-    try flush(port, .{ .input = true });
-    try std.testing.expectEqual(false, try poll(port));
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(&slave));
+    try flush(&slave, .{ .input = true });
+    try std.testing.expectEqual(false, try poll(&slave));
+}
+
+test {
+    var master: PortImpl = undefined;
+    var slave: PortImpl = undefined;
+    try openVirtualPorts(&master, &slave);
+    defer close(&master);
+    defer close(&slave);
+
+    const config: serialport.Config = .{ .baud_rate = .B115200 };
+    try configure(&master, config);
+    try configure(&slave, config);
+
+    const writer_m = writer(&master);
+    const reader_s = reader(&slave);
+
+    try std.testing.expectEqual(false, try poll(&slave));
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(&slave));
+
+    var buffer: [16]u8 = undefined;
+    try std.testing.expectEqual(12, try reader_s.read(&buffer));
+    try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
+    try std.testing.expectEqual(false, try poll(&slave));
+
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(&slave));
+
+    var small_buffer: [8]u8 = undefined;
+    try std.testing.expectEqual(8, try reader_s.read(&small_buffer));
+    try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
+    try std.testing.expectEqual(true, try poll(&slave));
+    try std.testing.expectEqual(4, try reader_s.read(&small_buffer));
+    try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
+    try std.testing.expectEqual(false, try poll(&slave));
+
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(&slave));
+    try flush(&slave, .{ .input = true });
+    try std.testing.expectEqual(false, try poll(&slave));
 }
