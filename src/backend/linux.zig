@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const serialport = @import("../serialport.zig");
+const linux = std.os.linux;
 
 pub const PortImpl = std.fs.File;
 
@@ -16,11 +17,11 @@ pub fn open(path: []const u8) !PortImpl {
     });
 }
 
-pub fn close(port: PortImpl) void {
+pub fn close(port: *const PortImpl) void {
     port.close();
 }
 
-pub fn configure(port: PortImpl, config: serialport.Config) !void {
+pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
     var settings = try std.posix.tcgetattr(port.handle);
 
     settings.iflag = .{};
@@ -67,7 +68,10 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     try std.posix.tcsetattr(port.handle, .NOW, settings);
 }
 
-pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
+pub fn flush(
+    port: *const PortImpl,
+    options: serialport.Port.FlushOptions,
+) !void {
     if (!options.input and !options.output) return;
 
     const TCIFLUSH = 0;
@@ -75,7 +79,7 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
     const TCIOFLUSH = 2;
     const TCFLSH = 0x540B;
 
-    const result = std.os.linux.syscall3(
+    const result = linux.syscall3(
         .ioctl,
         @bitCast(@as(isize, @intCast(port.handle))),
         TCFLSH,
@@ -94,30 +98,29 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
     };
 }
 
-pub fn poll(port: PortImpl) !bool {
-    var pollfds: [1]std.os.linux.pollfd = .{
+pub fn poll(port: *const PortImpl) !bool {
+    var pollfds: [1]linux.pollfd = .{
         .{
             .fd = port.handle,
-            .events = std.os.linux.POLL.IN,
+            .events = linux.POLL.IN,
             .revents = undefined,
         },
     };
-    if (std.os.linux.poll(&pollfds, 1, 0) == 0) return false;
+    if (linux.poll(&pollfds, 1, 0) == 0) return false;
 
-    if (pollfds[0].revents & std.os.linux.POLL.IN == 0) return false;
+    if (pollfds[0].revents & linux.POLL.IN == 0) return false;
 
-    const err_mask = std.os.linux.POLL.ERR |
-        std.os.linux.POLL.NVAL | std.os.linux.POLL.HUP;
-
+    const err_mask = linux.POLL.ERR | linux.POLL.NVAL | linux.POLL.HUP;
     if (pollfds[0].revents & err_mask != 0) return false;
+
     return true;
 }
 
-pub fn reader(port: PortImpl) Reader {
+pub fn reader(port: *const PortImpl) Reader {
     return port.reader();
 }
 
-pub fn writer(port: PortImpl) Writer {
+pub fn writer(port: *const PortImpl) Writer {
     return port.writer();
 }
 
