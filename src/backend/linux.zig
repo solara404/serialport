@@ -31,27 +31,14 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
 
     settings.cflag = .{};
     settings.cflag.CREAD = true;
+    settings.cflag.CLOCAL = config.handshake == .none;
     settings.cflag.CSTOPB = config.stop_bits == .two;
     settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
-    if (config.handshake == .hardware) {
-        settings.cflag.CRTSCTS = true;
-    } else if (config.handshake == .none) {
-        settings.cflag.CLOCAL = true;
-    }
+    settings.cflag.CRTSCTS = config.handshake == .hardware;
 
     settings.cflag.PARENB = config.parity != .none;
-    switch (config.parity) {
-        .none, .even => {},
-        .odd => settings.cflag.PARODD = true,
-        .mark => {
-            settings.cflag.PARODD = true;
-            settings.cflag.CMSPAR = true;
-        },
-        .space => {
-            settings.cflag.PARODD = false;
-            settings.cflag.CMSPAR = true;
-        },
-    }
+    settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
+    settings.cflag.CMSPAR = config.parity == .mark or config.parity == .space;
 
     settings.oflag = .{};
     settings.lflag = .{};
@@ -59,11 +46,11 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
     settings.ospeed = config.baud_rate;
 
     // Minimum arrived bytes before read returns.
-    settings.cc[@intFromEnum(std.os.linux.V.MIN)] = 0;
+    settings.cc[@intFromEnum(linux.V.MIN)] = 0;
     // Inter-byte timeout before read returns.
-    settings.cc[@intFromEnum(std.os.linux.V.TIME)] = 0;
-    settings.cc[@intFromEnum(std.os.linux.V.START)] = 0x11;
-    settings.cc[@intFromEnum(std.os.linux.V.STOP)] = 0x13;
+    settings.cc[@intFromEnum(linux.V.TIME)] = 0;
+    settings.cc[@intFromEnum(linux.V.START)] = 0x11;
+    settings.cc[@intFromEnum(linux.V.STOP)] = 0x13;
 
     try std.posix.tcsetattr(port.handle, .NOW, settings);
 }
