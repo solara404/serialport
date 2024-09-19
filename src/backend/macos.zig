@@ -36,6 +36,8 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     if (config.handshake == .hardware) {
         settings.cflag.CCTS_OFLOW = true;
         settings.cflag.CRTS_IFLOW = true;
+    } else {
+        settings.cflag.CLOCAL = true;
     }
 
     settings.cflag.PARENB = config.parity != .none;
