@@ -27,27 +27,63 @@ pub const Port = struct {
     };
 
     pub fn close(self: *@This()) void {
-        backend.close(&self._impl);
+        const fnti = @typeInfo(@TypeOf(backend.close)).@"fn";
+        const param_type = @typeInfo(fnti.params[0].type.?);
+        switch (comptime param_type) {
+            .pointer => backend.close(&self._impl),
+            .@"struct" => backend.close(self._impl),
+            else => @compileError("invalid function signature"),
+        }
     }
 
     pub fn configure(self: *@This(), config: Config) !void {
-        return backend.configure(&self._impl, config);
+        const fnti = @typeInfo(@TypeOf(backend.configure)).@"fn";
+        const param_type = @typeInfo(fnti.params[0].type.?);
+        return switch (comptime param_type) {
+            .pointer => backend.configure(&self._impl, config),
+            .@"struct" => backend.configure(self._impl, config),
+            else => @compileError("invalid function signature"),
+        };
     }
 
     pub fn flush(self: *@This(), options: FlushOptions) !void {
-        return backend.flush(&self._impl, options);
+        const fnti = @typeInfo(@TypeOf(backend.flush)).@"fn";
+        const param_type = @typeInfo(fnti.params[0].type.?);
+        return switch (comptime param_type) {
+            .pointer => backend.flush(&self._impl, options),
+            .@"struct" => backend.flush(self._impl, options),
+            else => @compileError("invalid function signature"),
+        };
     }
 
     pub fn poll(self: *@This()) !bool {
-        return backend.poll(&self._impl);
+        const fnti = @typeInfo(@TypeOf(backend.poll)).@"fn";
+        const param_type = @typeInfo(fnti.params[0].type.?);
+        return switch (comptime param_type) {
+            .pointer => backend.poll(&self._impl),
+            .@"struct" => backend.poll(self._impl),
+            else => @compileError("invalid function signature"),
+        };
     }
 
     pub fn reader(self: *@This()) Reader {
-        return backend.reader(&self._impl);
+        const fnti = @typeInfo(@TypeOf(backend.reader)).@"fn";
+        const param_type = @typeInfo(fnti.params[0].type.?);
+        return switch (comptime param_type) {
+            .pointer => backend.reader(&self._impl),
+            .@"struct" => backend.reader(self._impl),
+            else => @compileError("invalid function signature"),
+        };
     }
 
     pub fn writer(self: *@This()) Writer {
-        return backend.writer(&self._impl);
+        const fnti = @typeInfo(@TypeOf(backend.writer)).@"fn";
+        const param_type = @typeInfo(fnti.params[0].type.?);
+        return switch (comptime param_type) {
+            .pointer => backend.writer(&self._impl),
+            .@"struct" => backend.writer(self._impl),
+            else => @compileError("invalid function signature"),
+        };
     }
 };
 

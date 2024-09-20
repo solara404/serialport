@@ -17,11 +17,11 @@ pub fn open(path: []const u8) !PortImpl {
     });
 }
 
-pub fn close(port: *const PortImpl) void {
+pub fn close(port: PortImpl) void {
     port.close();
 }
 
-pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
+pub fn configure(port: PortImpl, config: serialport.Config) !void {
     var settings = try std.posix.tcgetattr(port.handle);
 
     settings.iflag = .{};
@@ -67,10 +67,7 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
     try std.posix.tcsetattr(port.handle, .NOW, settings);
 }
 
-pub fn flush(
-    port: *const PortImpl,
-    options: serialport.Port.FlushOptions,
-) !void {
+pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
     if (!options.input and !options.output) return;
     const result = c.tcflush(
         port.handle,
@@ -89,7 +86,7 @@ pub fn flush(
     };
 }
 
-pub fn poll(port: *const PortImpl) !bool {
+pub fn poll(port: PortImpl) !bool {
     var pollfds: [1]std.posix.pollfd = .{
         .{
             .fd = port.handle,
@@ -106,11 +103,11 @@ pub fn poll(port: *const PortImpl) !bool {
     return true;
 }
 
-pub fn reader(port: *const PortImpl) Reader {
+pub fn reader(port: PortImpl) Reader {
     return port.reader();
 }
 
-pub fn writer(port: *const PortImpl) Writer {
+pub fn writer(port: PortImpl) Writer {
     return port.writer();
 }
 
