@@ -29,7 +29,7 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
     settings.iflag.IXON = config.handshake == .software;
     settings.iflag.IXOFF = config.handshake == .software;
 
-    settings.cflag = .{};
+    settings.cflag = @bitCast(@intFromEnum(config.baud_rate));
     settings.cflag.CREAD = true;
     settings.cflag.CLOCAL = config.handshake == .none;
     settings.cflag.CSTOPB = config.stop_bits == .two;
