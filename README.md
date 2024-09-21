@@ -2,6 +2,13 @@
 
 ![Linux Port Iteration Result](assets/Linux_Iteration_Demo.png)
 
+## Todo
+
+- [ ] Offer both blocking and non-blocking reads/writes
+- [ ] Port descriptions and information
+- [ ] Export C library
+- [ ] Async port interface (dependent on re-introduction of Zig async)
+
 ## Examples
 
 ### Port Iteration
