@@ -25,20 +25,20 @@ pub fn configure(
 
     if (config.input_baud_rate) |ibr| {
         switch (std.posix.errno(
-            c.cfsetospeed(@ptrCast(&settings), config.baud_rate),
+            c.cfsetospeed(@ptrCast(&settings), @intFromEnum(config.baud_rate)),
         )) {
             .SUCCESS => {},
             else => |err| std.posix.unexpectedErrno(err),
         }
         switch (std.posix.errno(
-            c.cfsetispeed(@ptrCast(&settings), ibr),
+            c.cfsetispeed(@ptrCast(&settings), @intFromEnum(ibr)),
         )) {
             .SUCCESS => {},
             else => |err| std.posix.unexpectedErrno(err),
         }
     } else {
         switch (std.posix.errno(
-            c.cfsetspeed(@ptrCast(&settings), config.baud_rate),
+            c.cfsetspeed(@ptrCast(&settings), @intFromEnum(config.baud_rate)),
         )) {
             .SUCCESS => {},
             else => |err| std.posix.unexpectedErrno(err),
