@@ -5,12 +5,25 @@ const linux = std.os.linux;
 
 pub const BaudRate = b: {
     const ti = @typeInfo(std.os.linux.speed_t).@"enum";
-    const baud_rate_ti: std.builtin.Type.Enum = .{
+    var baud_rate_ti: std.builtin.Type.Enum = .{
         .tag_type = ti.tag_type,
-        .fields = ti.fields,
+        .fields = undefined,
         .decls = &.{},
         .is_exhaustive = false,
     };
+    var fields: [ti.fields.len]std.builtin.Type.EnumField = undefined;
+    @setEvalBranchQuota(3_874);
+    for (ti.fields, 0..) |field, i| {
+        fields[i].name = field.name;
+        fields[i].value = std.fmt.parseInt(
+            ti.tag_type,
+            field.name[1..],
+            10,
+        ) catch {
+            @compileError("invalid baud rate tag");
+        };
+    }
+    baud_rate_ti.fields = &fields;
     break :b @Type(std.builtin.Type{ .@"enum" = baud_rate_ti });
 };
 
@@ -80,6 +93,22 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     else
         custom_output_baud;
 
+    var output_baud_bits = @intFromEnum(config.baud_rate);
+    var input_baud_bits = @intFromEnum(
+        if (config.input_baud_rate) |ibr| ibr else config.baud_rate,
+    );
+
+    inline for (@typeInfo(serialport.Config.BaudRate).@"enum".fields) |field| {
+        if (output_baud_bits == field.value) {
+            output_baud_bits =
+                @intFromEnum(@field(std.os.linux.speed_t, field.name));
+        }
+        if (input_baud_bits == field.value) {
+            input_baud_bits =
+                @intFromEnum(@field(std.os.linux.speed_t, field.name));
+        }
+    }
+
     var settings = try std.posix.tcgetattr(port.handle);
 
     // `cfmakeraw`
@@ -103,14 +132,17 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     var cflag: u32 = @bitCast(settings.cflag);
 
     // Set CBAUD and CIBAUD in cflag.
-    const baud_bits: u32 = @bitCast(@intFromEnum(config.baud_rate));
     cflag &= ~CBAUD;
     cflag &= ~CIBAUD;
-    cflag |= if (custom_output_baud) BOTHER else baud_bits;
-    if (config.input_baud_rate) |ibr| {
-        const input_baud_bits: u32 = @bitCast(@intFromEnum(ibr));
-        cflag |=
-            (if (custom_input_baud) input_baud_bits else BOTHER) << IBSHIFT;
+    if (custom_output_baud) {
+        cflag |= BOTHER;
+    } else {
+        cflag |= output_baud_bits;
+    }
+    if (custom_input_baud) {
+        cflag |= BOTHER << IBSHIFT;
+    } else {
+        cflag |= input_baud_bits << IBSHIFT;
     }
 
     settings.cflag = @bitCast(cflag);
@@ -121,10 +153,10 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     configureParity(&settings, config.parity);
     configureFlowControl(&settings, config.flow_control);
 
-    const ispeed: *serialport.Config.BaudRate = @ptrCast(&settings.ispeed);
-    ispeed.* = if (config.input_baud_rate) |ibr| ibr else config.baud_rate;
-    const ospeed: *serialport.Config.BaudRate = @ptrCast(&settings.ospeed);
-    ospeed.* = config.baud_rate;
+    const ospeed: *u32 = @ptrCast(&settings.ospeed);
+    ospeed.* = output_baud_bits;
+    const ispeed: *u32 = @ptrCast(&settings.ispeed);
+    ispeed.* = input_baud_bits;
 
     // Minimum arrived bytes before read returns.
     settings.cc[@intFromEnum(linux.V.MIN)] = 0;
@@ -264,7 +296,7 @@ fn openVirtualPorts(master_port: *PortImpl, slave_port: *PortImpl) !void {
     slave_port.* = try open(slave_name[0..slave_name_len]);
 }
 
-test {
+test "software flow control" {
     var master: PortImpl = undefined;
     var slave: PortImpl = undefined;
     try openVirtualPorts(&master, &slave);
@@ -316,6 +348,46 @@ test {
     defer close(slave);
 
     const config: serialport.Config = .{ .baud_rate = .B115200 };
+    try configure(master, config);
+    try configure(slave, config);
+
+    const writer_m = writer(master);
+    const reader_s = reader(slave);
+
+    try std.testing.expectEqual(false, try poll(slave));
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(slave));
+
+    var buffer: [16]u8 = undefined;
+    try std.testing.expectEqual(12, try reader_s.read(&buffer));
+    try std.testing.expectEqualSlices(u8, "test message", buffer[0..12]);
+    try std.testing.expectEqual(false, try poll(slave));
+
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(slave));
+
+    var small_buffer: [8]u8 = undefined;
+    try std.testing.expectEqual(8, try reader_s.read(&small_buffer));
+    try std.testing.expectEqualSlices(u8, "test mes", &small_buffer);
+    try std.testing.expectEqual(true, try poll(slave));
+    try std.testing.expectEqual(4, try reader_s.read(&small_buffer));
+    try std.testing.expectEqualSlices(u8, "sage", small_buffer[0..4]);
+    try std.testing.expectEqual(false, try poll(slave));
+
+    try std.testing.expectEqual(12, try writer_m.write("test message"));
+    try std.testing.expectEqual(true, try poll(slave));
+    try flush(slave, .{ .input = true });
+    try std.testing.expectEqual(false, try poll(slave));
+}
+
+test "custom baud rate" {
+    var master: PortImpl = undefined;
+    var slave: PortImpl = undefined;
+    try openVirtualPorts(&master, &slave);
+    defer close(master);
+    defer close(slave);
+
+    const config: serialport.Config = .{ .baud_rate = @enumFromInt(7667) };
     try configure(master, config);
     try configure(slave, config);
 
