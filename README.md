@@ -4,7 +4,7 @@
 
 ## Todo
 
-- [ ] Refactor backends to expose public API best suited for OS, then use these
+- [x] Refactor backends to expose public API best suited for OS, then use these
       APIs in platform-agnostic API implementation
 - [ ] Offer both blocking and non-blocking reads/writes
 - [ ] Port descriptions and information

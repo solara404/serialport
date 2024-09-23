@@ -27,32 +27,116 @@ pub const BaudRate = b: {
     break :b @Type(std.builtin.Type{ .@"enum" = baud_rate_ti });
 };
 
-pub const PortImpl = struct {
-    file: std.fs.File,
-    orig_termios: ?linux.termios = null,
-};
-
-pub const ReadError = std.fs.File.ReadError;
-pub const Reader = std.fs.File.Reader;
-pub const WriteError = std.fs.File.WriteError;
-pub const Writer = std.fs.File.Writer;
-
-pub fn open(path: []const u8) !PortImpl {
-    return .{
-        .file = try std.fs.cwd().openFile(path, .{
-            .mode = .read_write,
-            .allow_ctty = false,
-        }),
-    };
+pub fn open(path: []const u8) !std.fs.File {
+    return try std.fs.cwd().openFile(path, .{
+        .mode = .read_write,
+        .allow_ctty = false,
+    });
 }
 
-pub fn close(port: *PortImpl) void {
-    if (port.orig_termios) |orig_termios| {
-        std.posix.tcsetattr(port.file.handle, .NOW, orig_termios) catch {};
+/// Configure serial port. Returns original `termios` settings on success.
+pub fn configure(
+    port: std.fs.File,
+    config: serialport.Config,
+) !linux.termios {
+    var settings = try std.posix.tcgetattr(port.handle);
+    const orig_termios = settings;
+
+    // `cfmakeraw`
+    settings.iflag.IGNBRK = false;
+    settings.iflag.BRKINT = false;
+    settings.iflag.PARMRK = false;
+    settings.iflag.ISTRIP = false;
+    settings.iflag.INLCR = false;
+    settings.iflag.IGNCR = false;
+    settings.iflag.ICRNL = false;
+    settings.iflag.IXON = false;
+
+    settings.oflag.OPOST = false;
+
+    settings.lflag.ECHO = false;
+    settings.lflag.ECHONL = false;
+    settings.lflag.ICANON = false;
+    settings.lflag.ISIG = false;
+    settings.lflag.IEXTEN = false;
+
+    settings.cflag.CREAD = true;
+    settings.cflag.CSTOPB = config.stop_bits == .two;
+    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.data_bits));
+
+    configureBaudRate(&settings, config.baud_rate, config.input_baud_rate);
+    configureParity(&settings, config.parity);
+    configureFlowControl(&settings, config.flow_control);
+
+    // Minimum arrived bytes before read returns.
+    settings.cc[@intFromEnum(linux.V.MIN)] = 0;
+    // Inter-byte timeout before read returns.
+    settings.cc[@intFromEnum(linux.V.TIME)] = 0;
+    settings.cc[@intFromEnum(linux.V.START)] = 0x11;
+    settings.cc[@intFromEnum(linux.V.STOP)] = 0x13;
+
+    try std.posix.tcsetattr(port.handle, .NOW, settings);
+    return orig_termios;
+}
+
+fn configureBaudRate(
+    termios: *linux.termios,
+    baud_rate: BaudRate,
+    input_baud_rate: ?BaudRate,
+) void {
+    const CBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x000000FF,
+        else => 0x0000100F,
+    };
+    const CIBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x00FF0000,
+        else => 0x100F0000,
+    };
+    const BOTHER = switch (comptime builtin.target.cpu.arch) {
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x0000001F,
+        else => 0x00001000,
+    };
+    const IBSHIFT = 16;
+
+    const custom_out: bool = std.enums.tagName(BaudRate, baud_rate) == null;
+    const custom_in: bool = if (input_baud_rate) |ibr|
+        std.enums.tagName(BaudRate, ibr) == null
+    else
+        custom_out;
+
+    var out_bits = @intFromEnum(baud_rate);
+    var in_bits = @intFromEnum(if (input_baud_rate) |ibr| ibr else baud_rate);
+
+    inline for (@typeInfo(BaudRate).@"enum".fields) |field| {
+        if (out_bits == field.value) {
+            out_bits = @intFromEnum(@field(linux.speed_t, field.name));
+        }
+        if (in_bits == field.value) {
+            in_bits = @intFromEnum(@field(linux.speed_t, field.name));
+        }
     }
-    port.orig_termios = null;
-    port.file.close();
-    port.* = undefined;
+
+    var cflag: u32 = @bitCast(termios.cflag);
+
+    // Set CBAUD and CIBAUD in cflag.
+    cflag &= ~CBAUD;
+    cflag &= ~CIBAUD;
+    if (custom_out) {
+        cflag |= BOTHER;
+    } else {
+        cflag |= out_bits;
+    }
+    if (custom_in) {
+        cflag |= BOTHER << IBSHIFT;
+    } else {
+        cflag |= in_bits << IBSHIFT;
+    }
+    termios.cflag = @bitCast(cflag);
+
+    const ospeed: *u32 = @ptrCast(&termios.ospeed);
+    ospeed.* = out_bits;
+    const ispeed: *u32 = @ptrCast(&termios.ispeed);
+    ispeed.* = in_bits;
 }
 
 fn configureParity(
@@ -79,108 +163,7 @@ fn configureFlowControl(
     termios.iflag.IXOFF = flow_control == .software;
 }
 
-pub fn configure(port: *PortImpl, config: serialport.Config) !void {
-    const CBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
-        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x000000FF,
-        else => 0x0000100F,
-    };
-    const CIBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
-        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x00FF0000,
-        else => 0x100F0000,
-    };
-    const BOTHER = switch (comptime builtin.target.cpu.arch) {
-        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x0000001F,
-        else => 0x00001000,
-    };
-    const IBSHIFT = 16;
-
-    const custom_output_baud: bool = std.enums.tagName(
-        serialport.Config.BaudRate,
-        config.baud_rate,
-    ) == null;
-    const custom_input_baud: bool = if (config.input_baud_rate) |ibr|
-        std.enums.tagName(serialport.Config.BaudRate, ibr) == null
-    else
-        custom_output_baud;
-
-    var output_baud_bits = @intFromEnum(config.baud_rate);
-    var input_baud_bits = @intFromEnum(
-        if (config.input_baud_rate) |ibr| ibr else config.baud_rate,
-    );
-
-    inline for (@typeInfo(serialport.Config.BaudRate).@"enum".fields) |field| {
-        if (output_baud_bits == field.value) {
-            output_baud_bits =
-                @intFromEnum(@field(linux.speed_t, field.name));
-        }
-        if (input_baud_bits == field.value) {
-            input_baud_bits =
-                @intFromEnum(@field(linux.speed_t, field.name));
-        }
-    }
-
-    var settings = try std.posix.tcgetattr(port.file.handle);
-    const orig_termios = settings;
-
-    // `cfmakeraw`
-    settings.iflag.IGNBRK = false;
-    settings.iflag.BRKINT = false;
-    settings.iflag.PARMRK = false;
-    settings.iflag.ISTRIP = false;
-    settings.iflag.INLCR = false;
-    settings.iflag.IGNCR = false;
-    settings.iflag.ICRNL = false;
-    settings.iflag.IXON = false;
-
-    settings.oflag.OPOST = false;
-
-    settings.lflag.ECHO = false;
-    settings.lflag.ECHONL = false;
-    settings.lflag.ICANON = false;
-    settings.lflag.ISIG = false;
-    settings.lflag.IEXTEN = false;
-
-    var cflag: u32 = @bitCast(settings.cflag);
-
-    // Set CBAUD and CIBAUD in cflag.
-    cflag &= ~CBAUD;
-    cflag &= ~CIBAUD;
-    if (custom_output_baud) {
-        cflag |= BOTHER;
-    } else {
-        cflag |= output_baud_bits;
-    }
-    if (custom_input_baud) {
-        cflag |= BOTHER << IBSHIFT;
-    } else {
-        cflag |= input_baud_bits << IBSHIFT;
-    }
-
-    settings.cflag = @bitCast(cflag);
-    settings.cflag.CREAD = true;
-    settings.cflag.CSTOPB = config.stop_bits == .two;
-    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.data_bits));
-
-    configureParity(&settings, config.parity);
-    configureFlowControl(&settings, config.flow_control);
-
-    const ospeed: *u32 = @ptrCast(&settings.ospeed);
-    ospeed.* = output_baud_bits;
-    const ispeed: *u32 = @ptrCast(&settings.ispeed);
-    ispeed.* = input_baud_bits;
-
-    // Minimum arrived bytes before read returns.
-    settings.cc[@intFromEnum(linux.V.MIN)] = 0;
-    // Inter-byte timeout before read returns.
-    settings.cc[@intFromEnum(linux.V.TIME)] = 0;
-    settings.cc[@intFromEnum(linux.V.START)] = 0x11;
-    settings.cc[@intFromEnum(linux.V.STOP)] = 0x13;
-
-    try std.posix.tcsetattr(port.file.handle, .NOW, settings);
-    port.orig_termios = orig_termios;
-}
-
-pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
+pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
     if (!options.input and !options.output) return;
 
     const TCIFLUSH = 0;
@@ -190,7 +173,7 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
 
     const result = linux.syscall3(
         .ioctl,
-        @bitCast(@as(isize, @intCast(port.file.handle))),
+        @bitCast(@as(isize, @intCast(port.handle))),
         TCFLSH,
         if (options.input and options.output)
             TCIOFLUSH
@@ -207,14 +190,12 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
     };
 }
 
-pub fn poll(port: PortImpl) !bool {
-    var pollfds: [1]linux.pollfd = .{
-        .{
-            .fd = port.file.handle,
-            .events = linux.POLL.IN,
-            .revents = undefined,
-        },
-    };
+pub fn poll(port: std.fs.File) !bool {
+    var pollfds: [1]linux.pollfd = .{.{
+        .fd = port.handle,
+        .events = linux.POLL.IN,
+        .revents = undefined,
+    }};
     if (linux.poll(&pollfds, 1, 0) == 0) return false;
 
     if (pollfds[0].revents & linux.POLL.IN == 0) return false;
@@ -225,16 +206,8 @@ pub fn poll(port: PortImpl) !bool {
     return true;
 }
 
-pub fn reader(port: PortImpl) Reader {
-    return port.file.reader();
-}
-
-pub fn writer(port: PortImpl) Writer {
-    return port.file.writer();
-}
-
-pub fn iterate() !IteratorImpl {
-    var result: IteratorImpl = .{
+pub fn iterate() !Iterator {
+    var result: Iterator = .{
         .dir = std.fs.cwd().openDir(
             "/dev/serial/by-id",
             .{ .iterate = true },
@@ -250,16 +223,16 @@ pub fn iterate() !IteratorImpl {
     return result;
 }
 
-pub const IteratorImpl = struct {
+pub const Iterator = struct {
     dir: ?std.fs.Dir,
     iterator: std.fs.Dir.Iterator,
     name_buffer: [256]u8 = undefined,
     path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
-    pub fn next(self: *@This()) !?serialport.Iterator.Stub {
+    pub fn next(self: *@This()) !?serialport.Stub {
         if (self.dir == null) return null;
 
-        var result: serialport.Iterator.Stub = undefined;
+        var result: serialport.Stub = undefined;
         while (try self.iterator.next()) |entry| {
             if (entry.kind != .sym_link) continue;
             @memcpy(self.name_buffer[0..entry.name.len], entry.name);
@@ -284,7 +257,10 @@ pub const IteratorImpl = struct {
     }
 };
 
-fn openVirtualPorts(master_port: *PortImpl, slave_port: *PortImpl) !void {
+fn openVirtualPorts(
+    master_port: *std.fs.File,
+    slave_port: *std.fs.File,
+) !void {
     const c = @cImport({
         @cDefine("_XOPEN_SOURCE", "700");
         @cInclude("stdlib.h");
@@ -293,13 +269,13 @@ fn openVirtualPorts(master_port: *PortImpl, slave_port: *PortImpl) !void {
     });
 
     master_port.* = try open("/dev/ptmx");
-    errdefer close(master_port);
+    errdefer master_port.close();
 
-    if (c.grantpt(master_port.file.handle) < 0 or
-        c.unlockpt(master_port.file.handle) < 0)
+    if (c.grantpt(master_port.handle) < 0 or
+        c.unlockpt(master_port.handle) < 0)
         return error.MasterPseudoTerminalSetupError;
 
-    const slave_name = c.ptsname(master_port.file.handle) orelse
+    const slave_name = c.ptsname(master_port.handle) orelse
         return error.SlavePseudoTerminalSetupError;
     const slave_name_len = std.mem.len(slave_name);
     if (slave_name_len == 0)
@@ -309,22 +285,24 @@ fn openVirtualPorts(master_port: *PortImpl, slave_port: *PortImpl) !void {
 }
 
 test "software flow control" {
-    var master: PortImpl = undefined;
-    var slave: PortImpl = undefined;
+    var master: std.fs.File = undefined;
+    var slave: std.fs.File = undefined;
     try openVirtualPorts(&master, &slave);
-    defer close(&master);
-    defer close(&slave);
+    defer master.close();
+    defer slave.close();
 
     const config: serialport.Config = .{
         .baud_rate = .B230400,
         .flow_control = .software,
     };
 
-    try configure(&master, config);
-    try configure(&slave, config);
+    const orig_master = try configure(master, config);
+    defer std.posix.tcsetattr(master.handle, .NOW, orig_master) catch {};
+    const orig_slave = try configure(slave, config);
+    defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    const writer_m = writer(master);
-    const reader_s = reader(slave);
+    const writer_m = master.writer();
+    const reader_s = slave.reader();
 
     try std.testing.expectEqual(false, try poll(slave));
     try std.testing.expectEqual(12, try writer_m.write("test message"));
@@ -353,18 +331,20 @@ test "software flow control" {
 }
 
 test {
-    var master: PortImpl = undefined;
-    var slave: PortImpl = undefined;
+    var master: std.fs.File = undefined;
+    var slave: std.fs.File = undefined;
     try openVirtualPorts(&master, &slave);
-    defer close(&master);
-    defer close(&slave);
+    defer master.close();
+    defer slave.close();
 
     const config: serialport.Config = .{ .baud_rate = .B115200 };
-    try configure(&master, config);
-    try configure(&slave, config);
+    const orig_master = try configure(master, config);
+    defer std.posix.tcsetattr(master.handle, .NOW, orig_master) catch {};
+    const orig_slave = try configure(slave, config);
+    defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    const writer_m = writer(master);
-    const reader_s = reader(slave);
+    const writer_m = master.writer();
+    const reader_s = slave.reader();
 
     try std.testing.expectEqual(false, try poll(slave));
     try std.testing.expectEqual(12, try writer_m.write("test message"));
@@ -393,18 +373,20 @@ test {
 }
 
 test "custom baud rate" {
-    var master: PortImpl = undefined;
-    var slave: PortImpl = undefined;
+    var master: std.fs.File = undefined;
+    var slave: std.fs.File = undefined;
     try openVirtualPorts(&master, &slave);
-    defer close(&master);
-    defer close(&slave);
+    defer master.close();
+    defer slave.close();
 
     const config: serialport.Config = .{ .baud_rate = @enumFromInt(7667) };
-    try configure(&master, config);
-    try configure(&slave, config);
+    const orig_master = try configure(master, config);
+    defer std.posix.tcsetattr(master.handle, .NOW, orig_master) catch {};
+    const orig_slave = try configure(slave, config);
+    defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
 
-    const writer_m = writer(master);
-    const reader_s = reader(slave);
+    const writer_m = master.writer();
+    const reader_s = slave.reader();
 
     try std.testing.expectEqual(false, try poll(slave));
     try std.testing.expectEqual(12, try writer_m.write("test message"));

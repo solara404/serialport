@@ -4,60 +4,47 @@ const c = @cImport({
     @cInclude("termios.h");
 });
 
-pub const PortImpl = std.fs.File;
-pub const ReadError = std.fs.File.ReadError;
-pub const Reader = std.fs.File.Reader;
-pub const WriteError = std.fs.File.WriteError;
-pub const Writer = std.fs.File.Writer;
-
-pub fn open(path: []const u8) !PortImpl {
+pub fn open(path: []const u8) !std.fs.File {
     return try std.fs.cwd().openFile(path, .{
         .mode = .read_write,
         .allow_ctty = false,
     });
 }
 
-pub fn close(port: PortImpl) void {
-    port.close();
-}
+pub fn configure(
+    port: std.fs.File,
+    config: serialport.Config,
+) !std.posix.termios {
+    if (config.parity == .mark or config.parity == .space)
+        return error.ParityMarkSpaceUnsupported;
 
-pub fn configure(port: PortImpl, config: serialport.Config) !void {
     var settings = try std.posix.tcgetattr(port.handle);
+    const orig_termios = settings;
 
-    if (config.input_baud_rate != null) return error.InputBaudRateUnsupported;
+    c.cfmakeraw(&settings);
 
-    settings.iflag = .{};
-    settings.iflag.INPCK = config.parity != .none;
-    settings.iflag.IXON = config.flow_control == .software;
-    settings.iflag.IXOFF = config.flow_control == .software;
+    if (config.input_baud_rate) |ibr| {
+        switch (std.posix.errno(c.cfsetospeed(&settings, config.baud_rate))) {
+            .SUCCESS => {},
+            else => |err| std.posix.unexpectedErrno(err),
+        }
+        switch (std.posix.errno(c.cfsetispeed(&settings, ibr))) {
+            .SUCCESS => {},
+            else => |err| std.posix.unexpectedErrno(err),
+        }
+    } else {
+        switch (std.posix.errno(c.cfsetspeed(&settings, config.baud_rate))) {
+            .SUCCESS => {},
+            else => |err| std.posix.unexpectedErrno(err),
+        }
+    }
 
-    settings.cflag = @bitCast(@intFromEnum(config.baud_rate));
+    configureParity(&settings, config.parity);
+    configureFlowControl(&settings, config.flow_control);
+
     settings.cflag.CREAD = true;
     settings.cflag.CSTOPB = config.stop_bits == .two;
     settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.data_bits));
-    if (config.flow_control == .hardware) {
-        settings.cflag.CCTS_OFLOW = true;
-        settings.cflag.CRTS_IFLOW = true;
-    } else {
-        settings.cflag.CLOCAL = true;
-    }
-
-    settings.cflag.PARENB = config.parity != .none;
-    switch (config.parity) {
-        .none, .even => {},
-        .odd => settings.cflag.PARODD = true,
-        .mark => {
-            return error.ParityMarkSpaceUnsupported;
-        },
-        .space => {
-            return error.ParityMarkSpaceUnsupported;
-        },
-    }
-
-    settings.oflag = .{};
-    settings.lflag = .{};
-    settings.ispeed = config.baud_rate;
-    settings.ospeed = config.baud_rate;
 
     // Minimum arrived bytes before read returns.
     settings.cc[@intFromEnum(std.posix.V.MIN)] = 0;
@@ -67,9 +54,34 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     settings.cc[@intFromEnum(std.posix.V.STOP)] = 0x13;
 
     try std.posix.tcsetattr(port.handle, .NOW, settings);
+    return orig_termios;
 }
 
-pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
+fn configureParity(
+    termios: *std.posix.termios,
+    parity: serialport.Config.Parity,
+) void {
+    termios.cflag.PARENB = parity != .none;
+    termios.cflag.PARODD = parity == .odd;
+
+    termios.iflag.INPCK = parity != .none;
+    termios.iflag.IGNPAR = parity == .none;
+}
+
+fn configureFlowControl(
+    termios: *std.posix.termios,
+    flow_control: serialport.Config.FlowControl,
+) void {
+    termios.cflag.CLOCAL = flow_control == .none;
+    termios.cflag.CCTS_OFLOW = flow_control == .hardware;
+    termios.cflag.CRTS_IFLOW = flow_control == .hardware;
+
+    termios.iflag.IXANY = flow_control == .software;
+    termios.iflag.IXON = flow_control == .software;
+    termios.iflag.IXOFF = flow_control == .software;
+}
+
+pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
     if (!options.input and !options.output) return;
     const result = c.tcflush(
         port.handle,
@@ -88,7 +100,7 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
     };
 }
 
-pub fn poll(port: PortImpl) !bool {
+pub fn poll(port: std.fs.File) !bool {
     var pollfds: [1]std.posix.pollfd = .{
         .{
             .fd = port.handle,
@@ -105,16 +117,8 @@ pub fn poll(port: PortImpl) !bool {
     return true;
 }
 
-pub fn reader(port: PortImpl) Reader {
-    return port.reader();
-}
-
-pub fn writer(port: PortImpl) Writer {
-    return port.writer();
-}
-
-pub fn iterate() !IteratorImpl {
-    var result: IteratorImpl = .{
+pub fn iterate() !Iterator {
+    var result: Iterator = .{
         .dir = try std.fs.cwd().openDir("/dev", .{ .iterate = true }),
         .iterator = undefined,
     };
@@ -122,14 +126,14 @@ pub fn iterate() !IteratorImpl {
     return result;
 }
 
-pub const IteratorImpl = struct {
+pub const Iterator = struct {
     dir: std.fs.Dir,
     iterator: std.fs.Dir.Iterator,
     name_buffer: [256]u8 = undefined,
     path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
-    pub fn next(self: *@This()) !?serialport.Iterator.Stub {
-        var result: serialport.Iterator.Stub = undefined;
+    pub fn next(self: *@This()) !?serialport.Stub {
+        var result: serialport.Stub = undefined;
         while (try self.iterator.next()) |entry| {
             if (entry.kind != .file) continue;
             if (entry.name.len < 4) continue;

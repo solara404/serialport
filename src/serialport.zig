@@ -1,115 +1,144 @@
+const serialport = @This();
 const builtin = @import("builtin");
 const std = @import("std");
 
-const serialport = @This();
+pub const linux = @import("backend/linux.zig");
+pub const macos = @import("backend/macos.zig");
+pub const windows = @import("backend/windows.zig");
 
 pub fn iterate() !Iterator {
-    return .{
-        ._impl = try backend.iterate(),
-    };
+    switch (builtin.target.os.tag) {
+        .linux, .macos => return backend.iterate(),
+        else => return .{
+            ._impl = try backend.iterate(),
+        },
+    }
 }
 
 pub fn open(file_path: []const u8) !Port {
-    return .{ ._impl = try backend.open(file_path) };
+    return switch (builtin.target.os.tag) {
+        .linux, .macos, .windows => .{ ._impl = .{
+            .file = try backend.open(file_path),
+        } },
+        else => @compileError("unsupported OS"),
+    };
 }
 
+const PortImpl = switch (builtin.target.os.tag) {
+    .linux, .macos => struct {
+        file: std.fs.File,
+        orig_termios: ?std.posix.termios = null,
+    },
+    .windows => struct {
+        file: std.fs.File,
+        poll_overlapped: ?std.os.windows.OVERLAPPED = null,
+    },
+    else => @compileError("unsupported OS"),
+};
+
 pub const Port = struct {
-    _impl: backend.PortImpl,
+    _impl: PortImpl,
 
-    pub const Reader = backend.Reader;
-    pub const ReadError = backend.ReadError;
-    pub const Writer = backend.Writer;
-    pub const WriteError = backend.WriteError;
-
-    pub const FlushOptions = struct {
-        input: bool = false,
-        output: bool = false,
+    pub const Reader = switch (builtin.target.os.tag) {
+        .linux, .macos => std.fs.File.Reader,
+        .windows => windows.Reader,
+        else => @compileError("unsupported OS"),
+    };
+    pub const ReadError = switch (builtin.target.os.tag) {
+        .linux, .macos => std.fs.File.ReadError,
+        .windows => windows.ReadError,
+        else => @compileError("unsupported OS"),
+    };
+    pub const Writer = switch (builtin.target.os.tag) {
+        .linux, .macos => std.fs.File.Writer,
+        .windows => windows.Writer,
+        else => @compileError("unsupported OS"),
+    };
+    pub const WriteError = switch (builtin.target.os.tag) {
+        .linux, .macos => std.fs.File.WriteError,
+        .windows => windows.WriteError,
+        else => @compileError("unsupported OS"),
     };
 
-    const close_ptr = switch (@typeInfo(
-        @typeInfo(@TypeOf(backend.close)).@"fn".params[0].type.?,
-    )) {
-        .pointer => true,
-        .@"struct" => false,
-        else => @compileError("invalid function signature"),
-    };
     pub fn close(self: *@This()) void {
-        backend.close(if (comptime close_ptr) &self._impl else self._impl);
+        switch (comptime builtin.target.os.tag) {
+            .linux, .macos => {
+                if (self._impl.orig_termios) |orig_termios| {
+                    std.posix.tcsetattr(
+                        self._impl.file.handle,
+                        .NOW,
+                        orig_termios,
+                    ) catch {};
+                }
+                self._impl.file.close();
+            },
+            .windows => {
+                self._impl.file.close();
+            },
+            else => @compileError("unsupported OS"),
+        }
         self.* = undefined;
     }
 
-    const configure_ptr = switch (@typeInfo(
-        @typeInfo(@TypeOf(backend.configure)).@"fn".params[0].type.?,
-    )) {
-        .pointer => true,
-        .@"struct" => false,
-        else => @compileError("invalid function signature"),
-    };
-    pub fn configure(
-        self: if (configure_ptr) *@This() else @This(),
-        config: Config,
-    ) !void {
-        return backend.configure(
-            if (comptime configure_ptr) &self._impl else self._impl,
-            config,
-        );
+    pub fn configure(self: *@This(), config: Config) !void {
+        switch (comptime builtin.target.os.tag) {
+            .linux, .macos => {
+                const termios = try backend.configure(
+                    self._impl.file,
+                    config,
+                );
+                // Only save original termios once so that reconfiguration
+                // will not overwrite original termios.
+                if (self._impl.orig_termios == null) {
+                    self._impl.orig_termios = termios;
+                }
+            },
+            .windows => try windows.configure(self._impl.file, config),
+            else => @compileError("unsupported OS"),
+        }
     }
 
-    const flush_ptr = switch (@typeInfo(
-        @typeInfo(@TypeOf(backend.flush)).@"fn".params[0].type.?,
-    )) {
-        .pointer => true,
-        .@"struct" => false,
-        else => @compileError("invalid function signature"),
-    };
-    pub fn flush(
-        self: if (flush_ptr) *@This() else @This(),
-        options: FlushOptions,
-    ) !void {
-        return backend.flush(
-            if (comptime flush_ptr) &self._impl else self._impl,
-            options,
-        );
+    pub fn flush(self: *@This(), options: FlushOptions) !void {
+        switch (comptime builtin.target.os.tag) {
+            .linux, .macos, .windows => try backend.flush(
+                self._impl.file,
+                options,
+            ),
+            else => @compileError("unsupported OS"),
+        }
     }
 
-    const poll_ptr = switch (@typeInfo(
-        @typeInfo(@TypeOf(backend.poll)).@"fn".params[0].type.?,
-    )) {
-        .pointer => true,
-        .@"struct" => false,
-        else => @compileError("invalid function signature"),
-    };
-    pub fn poll(self: if (poll_ptr) *@This() else @This()) !bool {
-        return backend.poll(
-            if (comptime poll_ptr) &self._impl else self._impl,
-        );
+    pub fn poll(self: *@This()) !bool {
+        switch (comptime builtin.target.os.tag) {
+            .linux, .macos => return backend.poll(self._impl.file),
+            .windows => return windows.poll(
+                self._impl.file,
+                &self._impl.poll_overlapped,
+            ),
+            else => @compileError("unsupported OS"),
+        }
     }
 
-    const reader_ptr = switch (@typeInfo(
-        @typeInfo(@TypeOf(backend.reader)).@"fn".params[0].type.?,
-    )) {
-        .pointer => true,
-        .@"struct" => false,
-        else => @compileError("invalid function signature"),
-    };
-    pub fn reader(self: if (reader_ptr) *@This() else @This()) Reader {
-        return backend.reader(
-            if (comptime reader_ptr) &self._impl else self._impl,
-        );
+    pub fn reader(self: @This()) Reader {
+        switch (comptime builtin.target.os.tag) {
+            .linux, .macos => return self._impl.file.reader(),
+            .windows => return windows.reader(self._impl.file),
+            else => @compileError("unsupported OS"),
+        }
     }
 
-    const writer_ptr = switch (@typeInfo(
-        @typeInfo(@TypeOf(backend.writer)).@"fn".params[0].type.?,
-    )) {
-        .pointer => true,
-        .@"struct" => false,
-        else => @compileError("invalid function signature"),
-    };
-    pub fn writer(self: if (writer_ptr) *@This() else @This()) Writer {
-        return backend.writer(
-            if (comptime writer_ptr) &self._impl else self._impl,
-        );
+    pub fn writer(self: @This()) Writer {
+        switch (comptime builtin.target.os.tag) {
+            .linux, .macos => return self._impl.file.writer(),
+            .windows => return windows.writer(self._impl.file),
+            else => @compileError("unsupported OS"),
+        }
     }
+};
+
+pub const FlushOptions = struct {
+    input: bool = false,
+    output: bool = false,
 };
 
 pub const Config = struct {
@@ -178,38 +207,49 @@ pub const Config = struct {
     };
 };
 
-pub const Iterator = struct {
-    _impl: backend.IteratorImpl,
+/// Serial port stub that contains minimal information necessary to
+/// identify and open a serial port. Stubs may be dependent on its source
+/// iterator, and are not guaranteed to stay valid after iterator state
+/// is changed.
+pub const Stub = struct {
+    name: []const u8,
+    path: []const u8,
 
-    /// Serial port stub that contains minimal information necessary to
-    /// identify and open a serial port. Stubs may be dependent on its source
-    /// iterator, and are not guaranteed to stay valid after iterator state
-    /// is changed.
-    pub const Stub = struct {
-        name: []const u8,
-        path: []const u8,
-
-        pub fn open(self: @This()) !Port {
-            return serialport.open(self.path);
-        }
-    };
-
-    pub fn next(self: *@This()) !?Stub {
-        return self._impl.next();
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self._impl.deinit();
+    pub fn open(self: @This()) !Port {
+        return serialport.open(self.path);
     }
 };
 
-const backend = switch (builtin.os.tag) {
-    .windows => @import("backend/windows.zig"),
-    .macos => @import("backend/macos.zig"),
-    .linux => @import("backend/linux.zig"),
+pub const Iterator = switch (builtin.target.os.tag) {
+    .linux => linux.Iterator,
+    .macos => macos.Iterator,
+    else => struct {
+        _impl: backend.IteratorImpl,
+
+        pub fn next(self: *@This()) !?Stub {
+            return self._impl.next();
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self._impl.deinit();
+        }
+    },
+};
+
+const backend = switch (builtin.target.os.tag) {
+    .windows => windows,
+    .macos => macos,
+    .linux => linux,
     else => @compileError("unsupported OS"),
 };
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDeclsRecursive(Port);
+    std.testing.refAllDeclsRecursive(Iterator);
+    std.testing.refAllDeclsRecursive(Stub);
+
+    switch (builtin.target.os.tag) {
+        .linux => std.testing.refAllDeclsRecursive(linux),
+        else => std.testing.refAllDeclsRecursive(builtin),
+    }
 }

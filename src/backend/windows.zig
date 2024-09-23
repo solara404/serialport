@@ -22,11 +22,6 @@ pub const BaudRate = enum(windows.DWORD) {
     _,
 };
 
-pub const PortImpl = struct {
-    file: std.fs.File,
-    poll_overlapped: ?windows.OVERLAPPED = null,
-};
-
 pub const ReadError =
     windows.ReadFileError ||
     windows.OpenError ||
@@ -48,22 +43,20 @@ pub const Writer = std.io.GenericWriter(
     writeFn,
 );
 
-pub fn open(path: []const u8) !PortImpl {
+pub fn open(path: []const u8) !std.fs.File {
     const path_w = try windows.sliceToPrefixedFileW(std.fs.cwd().fd, path);
-    var result: PortImpl = .{
-        .file = .{
-            .handle = windows.kernel32.CreateFileW(
-                path_w.span(),
-                windows.GENERIC_READ | windows.GENERIC_WRITE,
-                0,
-                null,
-                windows.OPEN_EXISTING,
-                windows.FILE_FLAG_OVERLAPPED,
-                null,
-            ),
-        },
+    const result: std.fs.File = .{
+        .handle = windows.kernel32.CreateFileW(
+            path_w.span(),
+            windows.GENERIC_READ | windows.GENERIC_WRITE,
+            0,
+            null,
+            windows.OPEN_EXISTING,
+            windows.FILE_FLAG_OVERLAPPED,
+            null,
+        ),
     };
-    if (result.file.handle == windows.INVALID_HANDLE_VALUE) {
+    if (result.handle == windows.INVALID_HANDLE_VALUE) {
         switch (windows.GetLastError()) {
             windows.Win32Error.FILE_NOT_FOUND => {
                 return error.FileNotFound;
@@ -71,22 +64,17 @@ pub fn open(path: []const u8) !PortImpl {
             else => |e| return windows.unexpectedError(e),
         }
     }
-    errdefer result.close();
     return result;
 }
 
-pub fn close(port: *PortImpl) void {
-    port.file.close();
-    port.poll_overlapped = null;
-}
-
-pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
+pub fn configure(port: std.fs.File, config: serialport.Config) !void {
     var dcb: DCB = std.mem.zeroes(DCB);
     dcb.DCBlength = @sizeOf(DCB);
 
-    if (config.input_baud_rate != null) return error.InputBaudRateUnsupported;
+    if (config.input_baud_rate != null)
+        return error.InputBaudRateUnsupported;
 
-    if (GetCommState(port.file.handle, &dcb) == 0)
+    if (GetCommState(port.handle, &dcb) == 0)
         return windows.unexpectedError(windows.GetLastError());
 
     dcb.BaudRate = config.baud_rate;
@@ -103,10 +91,10 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
     dcb.XonChar = 0x11;
     dcb.XoffChar = 0x13;
 
-    if (SetCommState(port.file.handle, &dcb) == 0) {
+    if (SetCommState(port.handle, &dcb) == 0) {
         return windows.unexpectedError(windows.GetLastError());
     }
-    if (SetCommMask(port.file.handle, .{ .RXCHAR = true }) == 0) {
+    if (SetCommMask(port.handle, .{ .RXCHAR = true }) == 0) {
         return windows.unexpectedError(windows.GetLastError());
     }
     const timeouts: CommTimeouts = .{
@@ -116,14 +104,14 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
         .WriteTotalTimeoutMultiplier = 0,
         .WriteTotalTimeoutConstant = 0,
     };
-    if (SetCommTimeouts(port.file.handle, &timeouts) == 0) {
+    if (SetCommTimeouts(port.handle, &timeouts) == 0) {
         return windows.unexpectedError(windows.GetLastError());
     }
 }
 
-pub fn flush(port: *const PortImpl, options: serialport.Port.FlushOptions) !void {
+pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
     if (!options.input and !options.output) return;
-    if (PurgeComm(port.file.handle, .{
+    if (PurgeComm(port.handle, .{
         .PURGE_TXCLEAR = options.output,
         .PURGE_RXCLEAR = options.input,
     }) == 0) {
@@ -131,24 +119,24 @@ pub fn flush(port: *const PortImpl, options: serialport.Port.FlushOptions) !void
     }
 }
 
-pub fn poll(port: *PortImpl) !bool {
+pub fn poll(port: std.fs.File, overlapped_: *?windows.OVERLAPPED) !bool {
     var comstat: ComStat = undefined;
-    if (ClearCommError(port.file.handle, null, &comstat) == 0) {
+    if (ClearCommError(port.handle, null, &comstat) == 0) {
         return windows.unexpectedError(windows.GetLastError());
     }
     if (comstat.cbInQue > 0) return true;
 
     var events: EventMask = undefined;
-    if (port.poll_overlapped) |*overlapped| {
+    if (overlapped_.*) |*overlapped| {
         if (windows.GetOverlappedResult(
-            port.file.handle,
+            port.handle,
             overlapped,
             false,
         ) catch |e| switch (e) {
             error.WouldBlock => return false,
             else => return e,
         } != 0) {
-            port.poll_overlapped = null;
+            overlapped_.* = null;
             return true;
         } else {
             switch (windows.GetLastError()) {
@@ -157,7 +145,7 @@ pub fn poll(port: *PortImpl) !bool {
             }
         }
     } else {
-        port.poll_overlapped = .{
+        overlapped_.* = .{
             .Internal = 0,
             .InternalHigh = 0,
             .DUMMYUNIONNAME = .{
@@ -173,7 +161,7 @@ pub fn poll(port: *PortImpl) !bool {
                 windows.EVENT_ALL_ACCESS,
             ),
         };
-        if (WaitCommEvent(port.file.handle, &events, &port.poll_overlapped.?) == 0) {
+        if (WaitCommEvent(port.handle, &events, &overlapped_.*.?) == 0) {
             switch (windows.GetLastError()) {
                 windows.Win32Error.IO_PENDING => return false,
                 else => |e| return windows.unexpectedError(e),
@@ -183,15 +171,15 @@ pub fn poll(port: *PortImpl) !bool {
     }
 }
 
-pub fn reader(port: *const PortImpl) Reader {
-    return .{ .context = port.file };
+pub fn reader(port: std.fs.File) Reader {
+    return .{ .context = port };
 }
 
-pub fn writer(port: *const PortImpl) Writer {
-    return .{ .context = port.file };
+pub fn writer(port: std.fs.File) Writer {
+    return .{ .context = port };
 }
 
-pub fn iterate() !IteratorImpl {
+pub fn iterate() !Iterator {
     const HKEY_LOCAL_MACHINE = @as(windows.HKEY, @ptrFromInt(0x80000002));
     const KEY_READ = 0x20019;
 
@@ -228,7 +216,7 @@ pub fn iterate() !IteratorImpl {
         '\\',
     };
 
-    var result: IteratorImpl = .{ .key = undefined };
+    var result: Iterator = .{ .key = undefined };
     if (windows.advapi32.RegOpenKeyExW(
         HKEY_LOCAL_MACHINE,
         &w_str,
@@ -242,13 +230,13 @@ pub fn iterate() !IteratorImpl {
     return result;
 }
 
-pub const IteratorImpl = struct {
+pub const Iterator = struct {
     key: windows.HKEY,
     index: windows.DWORD = 0,
     name_buffer: [16]u8 = undefined,
     path_buffer: [16]u8 = undefined,
 
-    pub fn next(self: *@This()) !?serialport.Iterator.Stub {
+    pub fn next(self: *@This()) !?serialport.Stub {
         defer self.index += 1;
 
         var name_size: windows.DWORD = 256;
@@ -265,7 +253,7 @@ pub const IteratorImpl = struct {
             &self.name_buffer,
             &data_size,
         )) {
-            0 => serialport.Iterator.Stub{
+            0 => serialport.Stub{
                 .name = self.name_buffer[0 .. data_size - 1],
                 .path = try std.fmt.bufPrint(
                     &self.path_buffer,
