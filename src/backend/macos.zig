@@ -21,19 +21,25 @@ pub fn configure(
     var settings = try std.posix.tcgetattr(port.handle);
     const orig_termios = settings;
 
-    c.cfmakeraw(&settings);
+    c.cfmakeraw(@ptrCast(&settings));
 
     if (config.input_baud_rate) |ibr| {
-        switch (std.posix.errno(c.cfsetospeed(&settings, config.baud_rate))) {
+        switch (std.posix.errno(
+            c.cfsetospeed(@ptrCast(&settings), config.baud_rate),
+        )) {
             .SUCCESS => {},
             else => |err| std.posix.unexpectedErrno(err),
         }
-        switch (std.posix.errno(c.cfsetispeed(&settings, ibr))) {
+        switch (std.posix.errno(
+            c.cfsetispeed(@ptrCast(&settings), ibr),
+        )) {
             .SUCCESS => {},
             else => |err| std.posix.unexpectedErrno(err),
         }
     } else {
-        switch (std.posix.errno(c.cfsetspeed(&settings, config.baud_rate))) {
+        switch (std.posix.errno(
+            c.cfsetspeed(@ptrCast(&settings), config.baud_rate),
+        )) {
             .SUCCESS => {},
             else => |err| std.posix.unexpectedErrno(err),
         }
