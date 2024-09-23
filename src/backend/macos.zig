@@ -28,20 +28,20 @@ pub fn configure(
             c.cfsetospeed(@ptrCast(&settings), @intFromEnum(config.baud_rate)),
         )) {
             .SUCCESS => {},
-            else => |err| std.posix.unexpectedErrno(err),
+            else => |err| return std.posix.unexpectedErrno(err),
         }
         switch (std.posix.errno(
             c.cfsetispeed(@ptrCast(&settings), @intFromEnum(ibr)),
         )) {
             .SUCCESS => {},
-            else => |err| std.posix.unexpectedErrno(err),
+            else => |err| return std.posix.unexpectedErrno(err),
         }
     } else {
         switch (std.posix.errno(
             c.cfsetspeed(@ptrCast(&settings), @intFromEnum(config.baud_rate)),
         )) {
             .SUCCESS => {},
-            else => |err| std.posix.unexpectedErrno(err),
+            else => |err| return std.posix.unexpectedErrno(err),
         }
     }
 
