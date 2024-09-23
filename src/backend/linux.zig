@@ -4,7 +4,7 @@ const serialport = @import("../serialport.zig");
 const linux = std.os.linux;
 
 pub const BaudRate = b: {
-    const ti = @typeInfo(std.os.linux.speed_t).@"enum";
+    const ti = @typeInfo(linux.speed_t).@"enum";
     var baud_rate_ti: std.builtin.Type.Enum = .{
         .tag_type = ti.tag_type,
         .fields = undefined,
@@ -27,7 +27,10 @@ pub const BaudRate = b: {
     break :b @Type(std.builtin.Type{ .@"enum" = baud_rate_ti });
 };
 
-pub const PortImpl = std.fs.File;
+pub const PortImpl = struct {
+    file: std.fs.File,
+    orig_termios: ?linux.termios = null,
+};
 
 pub const ReadError = std.fs.File.ReadError;
 pub const Reader = std.fs.File.Reader;
@@ -35,18 +38,25 @@ pub const WriteError = std.fs.File.WriteError;
 pub const Writer = std.fs.File.Writer;
 
 pub fn open(path: []const u8) !PortImpl {
-    return try std.fs.cwd().openFile(path, .{
-        .mode = .read_write,
-        .allow_ctty = false,
-    });
+    return .{
+        .file = try std.fs.cwd().openFile(path, .{
+            .mode = .read_write,
+            .allow_ctty = false,
+        }),
+    };
 }
 
-pub fn close(port: PortImpl) void {
-    port.close();
+pub fn close(port: *PortImpl) void {
+    if (port.orig_termios) |orig_termios| {
+        std.posix.tcsetattr(port.file.handle, .NOW, orig_termios) catch {};
+    }
+    port.orig_termios = null;
+    port.file.close();
+    port.* = undefined;
 }
 
 fn configureParity(
-    termios: *std.os.linux.termios,
+    termios: *linux.termios,
     parity: serialport.Config.Parity,
 ) void {
     termios.cflag.PARENB = parity != .none;
@@ -58,7 +68,7 @@ fn configureParity(
 }
 
 fn configureFlowControl(
-    termios: *std.os.linux.termios,
+    termios: *linux.termios,
     flow_control: serialport.Config.FlowControl,
 ) void {
     termios.cflag.CLOCAL = flow_control == .none;
@@ -69,7 +79,7 @@ fn configureFlowControl(
     termios.iflag.IXOFF = flow_control == .software;
 }
 
-pub fn configure(port: PortImpl, config: serialport.Config) !void {
+pub fn configure(port: *PortImpl, config: serialport.Config) !void {
     const CBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
         .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x000000FF,
         else => 0x0000100F,
@@ -101,15 +111,16 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     inline for (@typeInfo(serialport.Config.BaudRate).@"enum".fields) |field| {
         if (output_baud_bits == field.value) {
             output_baud_bits =
-                @intFromEnum(@field(std.os.linux.speed_t, field.name));
+                @intFromEnum(@field(linux.speed_t, field.name));
         }
         if (input_baud_bits == field.value) {
             input_baud_bits =
-                @intFromEnum(@field(std.os.linux.speed_t, field.name));
+                @intFromEnum(@field(linux.speed_t, field.name));
         }
     }
 
-    var settings = try std.posix.tcgetattr(port.handle);
+    var settings = try std.posix.tcgetattr(port.file.handle);
+    const orig_termios = settings;
 
     // `cfmakeraw`
     settings.iflag.IGNBRK = false;
@@ -165,7 +176,8 @@ pub fn configure(port: PortImpl, config: serialport.Config) !void {
     settings.cc[@intFromEnum(linux.V.START)] = 0x11;
     settings.cc[@intFromEnum(linux.V.STOP)] = 0x13;
 
-    try std.posix.tcsetattr(port.handle, .NOW, settings);
+    try std.posix.tcsetattr(port.file.handle, .NOW, settings);
+    port.orig_termios = orig_termios;
 }
 
 pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
@@ -178,7 +190,7 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
 
     const result = linux.syscall3(
         .ioctl,
-        @bitCast(@as(isize, @intCast(port.handle))),
+        @bitCast(@as(isize, @intCast(port.file.handle))),
         TCFLSH,
         if (options.input and options.output)
             TCIOFLUSH
@@ -198,7 +210,7 @@ pub fn flush(port: PortImpl, options: serialport.Port.FlushOptions) !void {
 pub fn poll(port: PortImpl) !bool {
     var pollfds: [1]linux.pollfd = .{
         .{
-            .fd = port.handle,
+            .fd = port.file.handle,
             .events = linux.POLL.IN,
             .revents = undefined,
         },
@@ -214,11 +226,11 @@ pub fn poll(port: PortImpl) !bool {
 }
 
 pub fn reader(port: PortImpl) Reader {
-    return port.reader();
+    return port.file.reader();
 }
 
 pub fn writer(port: PortImpl) Writer {
-    return port.writer();
+    return port.file.writer();
 }
 
 pub fn iterate() !IteratorImpl {
@@ -281,13 +293,13 @@ fn openVirtualPorts(master_port: *PortImpl, slave_port: *PortImpl) !void {
     });
 
     master_port.* = try open("/dev/ptmx");
-    errdefer close(master_port.*);
+    errdefer close(master_port);
 
-    if (c.grantpt(master_port.handle) < 0 or
-        c.unlockpt(master_port.handle) < 0)
+    if (c.grantpt(master_port.file.handle) < 0 or
+        c.unlockpt(master_port.file.handle) < 0)
         return error.MasterPseudoTerminalSetupError;
 
-    const slave_name = c.ptsname(master_port.handle) orelse
+    const slave_name = c.ptsname(master_port.file.handle) orelse
         return error.SlavePseudoTerminalSetupError;
     const slave_name_len = std.mem.len(slave_name);
     if (slave_name_len == 0)
@@ -300,16 +312,16 @@ test "software flow control" {
     var master: PortImpl = undefined;
     var slave: PortImpl = undefined;
     try openVirtualPorts(&master, &slave);
-    defer close(master);
-    defer close(slave);
+    defer close(&master);
+    defer close(&slave);
 
     const config: serialport.Config = .{
         .baud_rate = .B230400,
         .flow_control = .software,
     };
 
-    try configure(master, config);
-    try configure(slave, config);
+    try configure(&master, config);
+    try configure(&slave, config);
 
     const writer_m = writer(master);
     const reader_s = reader(slave);
@@ -344,12 +356,12 @@ test {
     var master: PortImpl = undefined;
     var slave: PortImpl = undefined;
     try openVirtualPorts(&master, &slave);
-    defer close(master);
-    defer close(slave);
+    defer close(&master);
+    defer close(&slave);
 
     const config: serialport.Config = .{ .baud_rate = .B115200 };
-    try configure(master, config);
-    try configure(slave, config);
+    try configure(&master, config);
+    try configure(&slave, config);
 
     const writer_m = writer(master);
     const reader_s = reader(slave);
@@ -384,12 +396,12 @@ test "custom baud rate" {
     var master: PortImpl = undefined;
     var slave: PortImpl = undefined;
     try openVirtualPorts(&master, &slave);
-    defer close(master);
-    defer close(slave);
+    defer close(&master);
+    defer close(&slave);
 
     const config: serialport.Config = .{ .baud_rate = @enumFromInt(7667) };
-    try configure(master, config);
-    try configure(slave, config);
+    try configure(&master, config);
+    try configure(&slave, config);
 
     const writer_m = writer(master);
     const reader_s = reader(slave);
