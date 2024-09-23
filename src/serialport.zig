@@ -221,19 +221,8 @@ pub const Stub = struct {
 };
 
 pub const Iterator = switch (builtin.target.os.tag) {
-    .linux => linux.Iterator,
-    .macos => macos.Iterator,
-    else => struct {
-        _impl: backend.IteratorImpl,
-
-        pub fn next(self: *@This()) !?Stub {
-            return self._impl.next();
-        }
-
-        pub fn deinit(self: *@This()) void {
-            self._impl.deinit();
-        }
-    },
+    .linux, .macos, .windows => backend.Iterator,
+    else => @compileError("unsupported OS"),
 };
 
 const backend = switch (builtin.target.os.tag) {
