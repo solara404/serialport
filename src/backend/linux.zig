@@ -3,6 +3,17 @@ const std = @import("std");
 const serialport = @import("../serialport.zig");
 const linux = std.os.linux;
 
+pub const BaudRate = b: {
+    const ti = @typeInfo(std.os.linux.speed_t).@"enum";
+    const baud_rate_ti: std.builtin.Type.Enum = .{
+        .tag_type = ti.tag_type,
+        .fields = ti.fields,
+        .decls = &.{},
+        .is_exhaustive = false,
+    };
+    break :b @Type(std.builtin.Type{ .@"enum" = baud_rate_ti });
+};
+
 pub const PortImpl = std.fs.File;
 
 pub const ReadError = std.fs.File.ReadError;
@@ -21,29 +32,99 @@ pub fn close(port: PortImpl) void {
     port.close();
 }
 
+fn configureParity(
+    termios: *std.os.linux.termios,
+    parity: serialport.Config.Parity,
+) void {
+    termios.cflag.PARENB = parity != .none;
+    termios.cflag.PARODD = parity == .odd or parity == .mark;
+    termios.cflag.CMSPAR = parity == .mark or parity == .space;
+
+    termios.iflag.INPCK = parity != .none;
+    termios.iflag.IGNPAR = parity == .none;
+}
+
+fn configureFlowControl(
+    termios: *std.os.linux.termios,
+    flow_control: serialport.Config.FlowControl,
+) void {
+    termios.cflag.CLOCAL = flow_control == .none;
+    termios.cflag.CRTSCTS = flow_control == .hardware;
+
+    termios.iflag.IXANY = flow_control == .software;
+    termios.iflag.IXON = flow_control == .software;
+    termios.iflag.IXOFF = flow_control == .software;
+}
+
 pub fn configure(port: PortImpl, config: serialport.Config) !void {
+    const CBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x000000FF,
+        else => 0x0000100F,
+    };
+    const CIBAUD: u32 = switch (comptime builtin.target.cpu.arch) {
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x00FF0000,
+        else => 0x100F0000,
+    };
+    const BOTHER = switch (comptime builtin.target.cpu.arch) {
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => 0x0000001F,
+        else => 0x00001000,
+    };
+    const IBSHIFT = 16;
+
+    const custom_output_baud: bool = std.enums.tagName(
+        serialport.Config.BaudRate,
+        config.baud_rate,
+    ) == null;
+    const custom_input_baud: bool = if (config.input_baud_rate) |ibr|
+        std.enums.tagName(serialport.Config.BaudRate, ibr) == null
+    else
+        custom_output_baud;
+
     var settings = try std.posix.tcgetattr(port.handle);
 
-    settings.iflag = .{};
-    settings.iflag.INPCK = config.parity != .none;
-    settings.iflag.IXON = config.handshake == .software;
-    settings.iflag.IXOFF = config.handshake == .software;
+    // `cfmakeraw`
+    settings.iflag.IGNBRK = false;
+    settings.iflag.BRKINT = false;
+    settings.iflag.PARMRK = false;
+    settings.iflag.ISTRIP = false;
+    settings.iflag.INLCR = false;
+    settings.iflag.IGNCR = false;
+    settings.iflag.ICRNL = false;
+    settings.iflag.IXON = false;
 
-    settings.cflag = @bitCast(@intFromEnum(config.baud_rate));
+    settings.oflag.OPOST = false;
+
+    settings.lflag.ECHO = false;
+    settings.lflag.ECHONL = false;
+    settings.lflag.ICANON = false;
+    settings.lflag.ISIG = false;
+    settings.lflag.IEXTEN = false;
+
+    var cflag: u32 = @bitCast(settings.cflag);
+
+    // Set CBAUD and CIBAUD in cflag.
+    const baud_bits: u32 = @bitCast(@intFromEnum(config.baud_rate));
+    cflag &= ~CBAUD;
+    cflag &= ~CIBAUD;
+    cflag |= if (custom_output_baud) BOTHER else baud_bits;
+    if (config.input_baud_rate) |ibr| {
+        const input_baud_bits: u32 = @bitCast(@intFromEnum(ibr));
+        cflag |=
+            (if (custom_input_baud) input_baud_bits else BOTHER) << IBSHIFT;
+    }
+
+    settings.cflag = @bitCast(cflag);
     settings.cflag.CREAD = true;
-    settings.cflag.CLOCAL = config.handshake == .none;
     settings.cflag.CSTOPB = config.stop_bits == .two;
-    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
-    settings.cflag.CRTSCTS = config.handshake == .hardware;
+    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.data_bits));
 
-    settings.cflag.PARENB = config.parity != .none;
-    settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
-    settings.cflag.CMSPAR = config.parity == .mark or config.parity == .space;
+    configureParity(&settings, config.parity);
+    configureFlowControl(&settings, config.flow_control);
 
-    settings.oflag = .{};
-    settings.lflag = .{};
-    settings.ispeed = config.baud_rate;
-    settings.ospeed = config.baud_rate;
+    const ispeed: *serialport.Config.BaudRate = @ptrCast(&settings.ispeed);
+    ispeed.* = if (config.input_baud_rate) |ibr| ibr else config.baud_rate;
+    const ospeed: *serialport.Config.BaudRate = @ptrCast(&settings.ospeed);
+    ospeed.* = config.baud_rate;
 
     // Minimum arrived bytes before read returns.
     settings.cc[@intFromEnum(linux.V.MIN)] = 0;
@@ -192,7 +273,7 @@ test {
 
     const config: serialport.Config = .{
         .baud_rate = .B230400,
-        .handshake = .software,
+        .flow_control = .software,
     };
 
     try configure(master, config);

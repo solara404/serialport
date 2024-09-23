@@ -113,11 +113,21 @@ pub const Port = struct {
 };
 
 pub const Config = struct {
+    /// Baud rate. Used as both output and input baud rate, unless an input
+    /// baud is separately provided.
     baud_rate: BaudRate,
+    /// Input-specific baud rate. Use only when a custom input baud rate
+    /// different than the output baud rate must be specified.
+    input_baud_rate: ?BaudRate = null,
+    /// Per-character parity bit use. Data bits must be less than eight to use
+    /// parity bit (eighth bit is used as parity bit).
     parity: Parity = .none,
+    /// Number of bits used to signal end of character. Appended after all data
+    /// and parity bits.
     stop_bits: StopBits = .one,
-    word_size: WordSize = .eight,
-    handshake: Handshake = .none,
+    /// Number of data bits to use per character.
+    data_bits: DataBits = .eight,
+    flow_control: FlowControl = .none,
 
     pub const BaudRate = if (@hasDecl(backend, "BaudRate"))
         backend.BaudRate
@@ -127,42 +137,43 @@ pub const Config = struct {
         @compileError("unsupported backend/OS");
 
     pub const Parity = enum(u3) {
-        /// No parity bit is used.
+        /// Do not create or check for parity bit per character.
         none,
-        /// Parity bit is `0` when an odd number of bits is set in the data.
+        /// Parity bit set to `0` when data has odd number of `1` bits.
         odd,
-        /// Parity bit is `0` when an even number of bits is set in the data.
+        /// Parity bit set to `0` when data has even number of `1` bits.
         even,
-        /// Parity bit is always `1`.
+        /// Parity bit always set to `1`.
         mark,
-        /// Parity bit is always `0`.
+        /// Parity bit always set to `0`. A.k.a. bit filling.
         space,
     };
 
     pub const StopBits = enum(u1) {
-        /// Length of stop bits is one bit.
+        /// One bit to signal end of character.
         one,
-        /// Length of stop bits is two bits.
+        /// Two bits to signal end of character.
         two,
     };
 
-    pub const WordSize = enum(u2) {
-        /// There are five data bits per word.
+    pub const DataBits = enum(u2) {
+        /// Five data bits per character.
         five,
-        /// There are six data bits per word.
+        /// Six data bits per character.
         six,
-        /// There are seven data bits per word.
+        /// Seven data bits per character.
         seven,
-        /// There are eight data bits per word.
+        /// Eight data bits per character.
         eight,
     };
 
-    pub const Handshake = enum(u2) {
-        /// No handshake is used.
+    pub const FlowControl = enum(u2) {
+        /// No flow control is used.
         none,
-        /// XON-XOFF software handshake is used.
+        /// XON-XOFF software flow control is used.
         software,
-        /// Hardware handshake with RTS (RFR) / CTS is used.
+        /// Hardware flow control with RTS (RFR) / CTS is used. A.k.a. hardware
+        /// handshaking, pacing.
         hardware,
     };
 };

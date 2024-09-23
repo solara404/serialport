@@ -24,16 +24,18 @@ pub fn close(port: PortImpl) void {
 pub fn configure(port: PortImpl, config: serialport.Config) !void {
     var settings = try std.posix.tcgetattr(port.handle);
 
+    if (config.input_baud_rate != null) return error.InputBaudRateUnsupported;
+
     settings.iflag = .{};
     settings.iflag.INPCK = config.parity != .none;
-    settings.iflag.IXON = config.handshake == .software;
-    settings.iflag.IXOFF = config.handshake == .software;
+    settings.iflag.IXON = config.flow_control == .software;
+    settings.iflag.IXOFF = config.flow_control == .software;
 
     settings.cflag = @bitCast(@intFromEnum(config.baud_rate));
     settings.cflag.CREAD = true;
     settings.cflag.CSTOPB = config.stop_bits == .two;
-    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.word_size));
-    if (config.handshake == .hardware) {
+    settings.cflag.CSIZE = @enumFromInt(@intFromEnum(config.data_bits));
+    if (config.flow_control == .hardware) {
         settings.cflag.CCTS_OFLOW = true;
         settings.cflag.CRTS_IFLOW = true;
     } else {

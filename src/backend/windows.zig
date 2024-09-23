@@ -84,18 +84,20 @@ pub fn configure(port: *const PortImpl, config: serialport.Config) !void {
     var dcb: DCB = std.mem.zeroes(DCB);
     dcb.DCBlength = @sizeOf(DCB);
 
+    if (config.input_baud_rate != null) return error.InputBaudRateUnsupported;
+
     if (GetCommState(port.file.handle, &dcb) == 0)
         return windows.unexpectedError(windows.GetLastError());
 
     dcb.BaudRate = config.baud_rate;
     dcb.flags = .{
         .Parity = config.parity != .none,
-        .OutxCtsFlow = config.handshake == .hardware,
-        .OutX = config.handshake == .software,
-        .InX = config.handshake == .software,
-        .RtsControl = config.handshake == .hardware,
+        .OutxCtsFlow = config.flow_control == .hardware,
+        .OutX = config.flow_control == .software,
+        .InX = config.flow_control == .software,
+        .RtsControl = config.flow_control == .hardware,
     };
-    dcb.ByteSize = 5 + @as(windows.BYTE, @intFromEnum(config.word_size));
+    dcb.ByteSize = 5 + @as(windows.BYTE, @intFromEnum(config.data_bits));
     dcb.Parity = @intFromEnum(config.parity);
     dcb.StopBits = if (config.stop_bits == .two) 2 else 0;
     dcb.XonChar = 0x11;
