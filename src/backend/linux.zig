@@ -28,10 +28,16 @@ pub const BaudRate = b: {
 };
 
 pub fn open(path: []const u8) !std.fs.File {
-    return try std.fs.cwd().openFile(path, .{
+    var result = try std.fs.cwd().openFile(path, .{
         .mode = .read_write,
         .allow_ctty = false,
     });
+    errdefer result.close();
+
+    var fl_flags = try std.posix.fcntl(result.handle, std.posix.F.GETFL, 0);
+    fl_flags |= @as(usize, 1 << @bitOffsetOf(std.posix.O, "NONBLOCK"));
+    _ = try std.posix.fcntl(result.handle, std.posix.F.SETFL, fl_flags);
+    return result;
 }
 
 /// Configure serial port. Returns original `termios` settings on success.
@@ -79,7 +85,7 @@ pub fn configure(
     return orig_termios;
 }
 
-fn configureBaudRate(
+pub fn configureBaudRate(
     termios: *linux.termios,
     baud_rate: BaudRate,
     input_baud_rate: ?BaudRate,
@@ -139,7 +145,7 @@ fn configureBaudRate(
     ispeed.* = in_bits;
 }
 
-fn configureParity(
+pub fn configureParity(
     termios: *linux.termios,
     parity: serialport.Config.Parity,
 ) void {
@@ -151,7 +157,7 @@ fn configureParity(
     termios.iflag.IGNPAR = parity == .none;
 }
 
-fn configureFlowControl(
+pub fn configureFlowControl(
     termios: *linux.termios,
     flow_control: serialport.Config.FlowControl,
 ) void {
@@ -370,6 +376,24 @@ test {
     try std.testing.expectEqual(true, try poll(slave));
     try flush(slave, .{ .input = true });
     try std.testing.expectEqual(false, try poll(slave));
+}
+
+test "nonblock read" {
+    var master: std.fs.File = undefined;
+    var slave: std.fs.File = undefined;
+    try openVirtualPorts(&master, &slave);
+    defer master.close();
+    defer slave.close();
+
+    const config: serialport.Config = .{ .baud_rate = .B115200 };
+    const orig_master = try configure(master, config);
+    defer std.posix.tcsetattr(master.handle, .NOW, orig_master) catch {};
+    const orig_slave = try configure(slave, config);
+    defer std.posix.tcsetattr(slave.handle, .NOW, orig_slave) catch {};
+
+    var read_buffer: [16]u8 = undefined;
+    const reader_s = slave.reader();
+    try std.testing.expectEqual(0, try reader_s.read(&read_buffer));
 }
 
 test "custom baud rate" {

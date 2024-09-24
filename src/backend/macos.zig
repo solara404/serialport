@@ -5,10 +5,16 @@ const c = @cImport({
 });
 
 pub fn open(path: []const u8) !std.fs.File {
-    return try std.fs.cwd().openFile(path, .{
+    var result = try std.fs.cwd().openFile(path, .{
         .mode = .read_write,
         .allow_ctty = false,
     });
+    errdefer result.close();
+
+    var fl_flags = try std.posix.fcntl(result.handle, std.posix.F.GETFL, 0);
+    fl_flags |= @as(usize, 1 << @bitOffsetOf(std.posix.O, "NONBLOCK"));
+    _ = try std.posix.fcntl(result.handle, std.posix.F.SETFL, fl_flags);
+    return result;
 }
 
 pub fn configure(
@@ -63,7 +69,7 @@ pub fn configure(
     return orig_termios;
 }
 
-fn configureParity(
+pub fn configureParity(
     termios: *std.posix.termios,
     parity: serialport.Config.Parity,
 ) void {
@@ -74,7 +80,7 @@ fn configureParity(
     termios.iflag.IGNPAR = parity == .none;
 }
 
-fn configureFlowControl(
+pub fn configureFlowControl(
     termios: *std.posix.termios,
     flow_control: serialport.Config.FlowControl,
 ) void {
