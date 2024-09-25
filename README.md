@@ -6,6 +6,7 @@
 
 - [x] Refactor backends to expose public API best suited for OS, then use these
       APIs in platform-agnostic API implementation
+- [ ] Support flow control status check
 - [ ] Offer both blocking and non-blocking reads/writes
 - [ ] Port descriptions and information
 - [ ] Export C library
