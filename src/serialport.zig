@@ -8,10 +8,8 @@ pub const windows = @import("backend/windows.zig");
 
 pub fn iterate() !Iterator {
     switch (builtin.target.os.tag) {
-        .linux, .macos => return backend.iterate(),
-        else => return .{
-            ._impl = try backend.iterate(),
-        },
+        .linux, .macos, .windows => return backend.iterate(),
+        else => @compileError("unsupported OS"),
     }
 }
 
