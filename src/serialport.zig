@@ -234,6 +234,7 @@ test {
     std.testing.refAllDeclsRecursive(Port);
     std.testing.refAllDeclsRecursive(Iterator);
     std.testing.refAllDeclsRecursive(Stub);
+    _ = try iterate();
 
     switch (builtin.target.os.tag) {
         .linux => std.testing.refAllDeclsRecursive(linux),
