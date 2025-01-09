@@ -238,6 +238,8 @@ test {
 
     switch (builtin.target.os.tag) {
         .linux => std.testing.refAllDeclsRecursive(linux),
-        else => std.testing.refAllDeclsRecursive(builtin),
+        .macos => std.testing.refAllDeclsRecursive(macos),
+        .windows => std.testing.refAllDeclsRecursive(windows),
+        else => @compileError("unsupported OS"),
     }
 }
