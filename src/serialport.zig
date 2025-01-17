@@ -29,7 +29,7 @@ const PortImpl = switch (builtin.target.os.tag) {
     },
     .windows => struct {
         file: std.fs.File,
-        poll_overlapped: ?std.os.windows.OVERLAPPED = null,
+        poll_continuation: ?windows.PollContinuation = null,
     },
     else => @compileError("unsupported OS"),
 };
@@ -109,10 +109,12 @@ pub const Port = struct {
     pub fn poll(self: *@This()) !bool {
         switch (comptime builtin.target.os.tag) {
             .linux, .macos => return backend.poll(self._impl.file),
-            .windows => return windows.poll(
-                self._impl.file,
-                &self._impl.poll_overlapped,
-            ),
+            .windows => {
+                return windows.poll(
+                    self._impl.file,
+                    &self._impl.poll_continuation,
+                );
+            },
             else => @compileError("unsupported OS"),
         }
     }
