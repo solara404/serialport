@@ -201,8 +201,8 @@ pub const Config = struct {
         none,
         /// XON-XOFF software flow control is used.
         software,
-        /// Hardware flow control with RTS (RFR) / CTS is used. A.k.a. hardware
-        /// handshaking, pacing.
+        /// Hardware flow control with RTS (RFR) / CTS is used. A.k.a.
+        /// hardware handshaking, pacing.
         hardware,
     };
 };

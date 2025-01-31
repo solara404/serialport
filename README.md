@@ -2,15 +2,18 @@
 
 ![Linux Port Iteration Result](assets/Linux_Iteration_Demo.png)
 
+Cross-platform serial port library, with convenient poll/read/write interface.
+Kept up to date to work with latest Zig master branch.
+
+The Windows/Linux backends are exercised in certain corporate dev tools, and
+thus are somewhat reliable. MacOS backend is not actively tested.
+
 ## Todo
 
-- [x] Refactor backends to expose public API best suited for OS, then use these
-      APIs in platform-agnostic API implementation
 - [ ] Support flow control status check
 - [ ] Offer both blocking and non-blocking reads/writes
 - [ ] Port descriptions and information
 - [ ] Export C library
-- [ ] Async port interface (dependent on re-introduction of Zig async)
 
 ## Examples
 
