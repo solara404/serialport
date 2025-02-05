@@ -188,12 +188,25 @@ pub fn flush(port: std.fs.File, options: serialport.FlushOptions) !void {
         else
             TCOFLUSH,
     );
-    return switch (std.posix.errno(result)) {
+    // Use `linux.E.init` rather than `std.posix.errno`, as `std.posix.errno`
+    // abstraction will not be set by syscall if libc is linked
+    return switch (linux.E.init(result)) {
         .SUCCESS => {},
         .BADF => error.FileNotFound,
         .NOTTY => error.FileNotTty,
         else => unreachable,
     };
+}
+
+test "flush error handling" {
+    var f: std.fs.File = try std.fs.cwd().createFile("temp.txt", .{});
+    defer std.fs.cwd().deleteFile("temp.txt") catch {};
+    defer f.close();
+
+    try std.testing.expectError(
+        error.FileNotTty,
+        flush(f, .{ .input = true, .output = true }),
+    );
 }
 
 pub fn poll(port: std.fs.File) !bool {
