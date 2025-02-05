@@ -137,8 +137,8 @@ pub const Port = struct {
 };
 
 pub const FlushOptions = struct {
-    input: bool = false,
-    output: bool = false,
+    input: bool = true,
+    output: bool = true,
 };
 
 pub const Config = struct {
